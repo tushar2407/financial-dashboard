@@ -1,0 +1,10 @@
+/* Custom overrides if needed, but relying mostly on Bootstrap now */
+body {
+    background-color: #121212;
+    /* Match Darkly theme background */
+}
+
+/* Ensure graphs fit containers */
+.graph-container {
+    height: 400px;
+}
