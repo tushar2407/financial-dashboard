@@ -5,3 +5,4 @@ numpy
 plotly
 scipy
 dash-bootstrap-components
+playwright
