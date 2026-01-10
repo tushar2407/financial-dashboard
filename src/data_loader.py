@@ -24,12 +24,20 @@ def load_and_clean_data(filepath_pattern=DATA_PATH):
     for filename in all_files:
         print(f"Loading {filename}...")
         try:
-            # Skip the first 2 rows as seen in the file view
-            # Pre-read and fix lines with extra columns (401k rows have an extra trailing comma)
+            # Read lines and find where the header actually starts
             with open(filename, 'r', encoding='utf-8-sig') as f:
-                lines = f.readlines()[2:]  # Skip first 2 rows
+                raw_lines = f.readlines()
             
-            # Fix lines with trailing commas
+            # Find the header row (contains 'Run Date')
+            header_idx = 0
+            for i, line in enumerate(raw_lines):
+                if 'Run Date' in line:
+                    header_idx = i
+                    break
+            
+            lines = raw_lines[header_idx:]
+            
+            # Fix lines with trailing commas (common in 401k rows)
             fixed_lines = []
             for line in lines:
                 # If line ends with just commas and newline, remove the extra trailing comma
@@ -282,15 +290,51 @@ def fetch_sector_data(symbols):
             print(f"Error loading sector cache: {e}")
             
     # Identify missing symbols
-    missing_symbols = [s for s in symbols if s not in cache or cache[s] == 'Unknown' or cache[s] == 'Error']
+    # Symbols already in cache (even if Unknown) should NOT be re-fetched every time
+    # Also ignore 'nan' or empty strings
+    missing_symbols = [s for s in symbols if s and str(s).lower() != 'nan' and s not in cache]
+    
+    # Manual Mapping for ETFs and common symbols that yfinance fails on
+    ETF_SECTORS = {
+        'VOOG': 'ETF - Growth',
+        'SCHG': 'ETF - Growth',
+        'VTI' : 'ETF - Broad Market',
+        'QQQM': 'ETF - Technology/Nasdaq',
+        'IBIT': 'ETF - Crypto',
+        'NLR' : 'ETF - Energy/Uranium',
+        'SMH' : 'ETF - Semiconductors',
+        'GLDM': 'ETF - Gold',
+        'SPYM': 'ETF - S&P 500',
+        'ARKK': 'ETF - Innovation',
+        'SPLG': 'ETF - S&P 500',
+        'SPAXX': 'Cash (Money Market)',
+        'FIG' : 'Technology', # Figma
+        'FID GR CO POOL CL S': '401k - Growth',
+        'VANG RUS 1000 GR TR': '401k - Growth',
+    }
+    
+    # Pre-populate from manual mapping if missing
+    for sym in symbols:
+        if sym in ETF_SECTORS and sym not in cache:
+            cache[sym] = ETF_SECTORS[sym]
+            updated = True
+            
+    # Re-check missing after manual mapping
+    missing_symbols = [s for s in missing_symbols if s not in cache]
     
     if not missing_symbols:
+        # One-time cleanup: remove 'nan' if it exists in cache
+        if "nan" in cache:
+            del cache["nan"]
+            updated = True
+        if updated:
+             with open(CACHE_PATH, 'w') as f:
+                json.dump(cache, f, indent=4)
         return cache
         
     print(f"Fetching sector data for {len(missing_symbols)} symbols...")
     
     # Fetch missing data
-    updated = False
     for i, sym in enumerate(missing_symbols):
         try:
             print(f"Fetching sector for {sym} ({i+1}/{len(missing_symbols)})...")
@@ -301,18 +345,19 @@ def fetch_sector_data(symbols):
             updated = True
             
             # Sleep to avoid rate limits
-            time.sleep(1.5) 
+            time.sleep(1.2) 
             
         except Exception as e:
             print(f"Error fetching sector for {sym}: {e}")
-            cache[sym] = 'Error'
+            cache[sym] = 'Unknown' # Mark as Unknown so we don't retry forever
             updated = True
-            # Still sleep on error
-            time.sleep(2)
+            time.sleep(1)
             
     # Save cache if updated
     if updated:
         try:
+            # Final cleanup of invalid keys before saving
+            cache = {k: v for k, v in cache.items() if k and str(k).lower() != 'nan'}
             with open(CACHE_PATH, 'w') as f:
                 json.dump(cache, f, indent=4)
         except Exception as e:
