@@ -19,45 +19,55 @@ start_date = global_df['Run Date'].min().strftime('%Y-%m-%d')
 global_prices = fetch_price_data(all_symbols, start_date, tx_df=global_df)
 global_sectors = fetch_sector_data(all_symbols)
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY], suppress_callback_exceptions=True)
+app = dash.Dash(__name__, 
+                external_stylesheets=[dbc.themes.DARKLY],
+                assets_folder='../assets',
+                suppress_callback_exceptions=True)
 server = app.server
 app.title = "Financial Dashboard"
 
-app.layout = dbc.Container([
-    dbc.Row([
-        dbc.Col([
-            html.H1("Financial Dashboard", className="text-center my-4 text-white"),
-            html.P("Track your investment performance", className="text-center text-muted mb-4"),
+app.layout = html.Div([
+    dbc.Container([
+        # Centered Apple-style Header
+        html.Div([
+            html.H1("Financial Dashboard", className="text-center mb-2 text-white display-4", 
+                    style={'fontWeight': '700', 'letterSpacing': '-0.04em'}),
+            html.P("Portfolio Analytics & Performance", 
+                   className="text-center text-muted mb-0 lead", 
+                   style={'fontWeight': '400', 'letterSpacing': '-0.02em'}),
+        ], className="dashboard-header mb-5"),
+        
+        dbc.Row([
+            dbc.Col([
+                dbc.Tabs(id='account-tabs', active_tab='individual', children=[
+                    dbc.Tab(label='Individual + ESPP', tab_id='individual'),
+                    dbc.Tab(label='401k', tab_id='401k'),
+                    dbc.Tab(label='Combined', tab_id='combined'),
+                ], className='justify-content-center mb-5'),
+            ], width=12)
+        ]),
+        
+        html.Div(id='dashboard-content'),
+        
+        # Allocation Section
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    dbc.Tabs(id='allocation-tabs', active_tab='stock', children=[
+                        dbc.Tab(label='Stock Allocation', tab_id='stock'),
+                        dbc.Tab(label='Industry Allocation', tab_id='industry')
+                    ], className='mb-4 d-inline-flex')
+                ], className="text-center mt-5 mb-3")
+            ], width=12)
+        ]),
+        
+        dbc.Row([
+            dbc.Col([
+                html.Div(id='allocation-chart-container', className="glass-card mb-5 p-4")
+            ], width=12)
         ])
-    ]),
-    
-    dbc.Tabs(id='account-tabs', active_tab='individual', children=[
-        dbc.Tab(label='Individual + ESPP', tab_id='individual'),
-        dbc.Tab(label='401k', tab_id='401k'),
-        dbc.Tab(label='Combined', tab_id='combined'),
-    ], className='mb-4'),
-    
-    html.Div(id='dashboard-content'),
-    
-    # Allocation Section (Static Layout)
-    dbc.Row([
-        dbc.Col([
-            dbc.Tabs(id='allocation-tabs', active_tab='stock', children=[
-                dbc.Tab(label='Stock Allocation', tab_id='stock'),
-                dbc.Tab(label='Industry Allocation', tab_id='industry')
-            ], className='mb-4')
-        ], width=12)
-    ]),
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardBody([
-                    html.Div(id='allocation-chart-container')
-                ])
-            ], className="bg-dark border-secondary shadow-sm")
-        ], width=12, className="mb-4")
-    ])
-], fluid=False, className="py-3") # fluid=False for fixed width container with margins
+    ], fluid=False, className="pb-5")
+], style={'overflowX': 'hidden'})
 
 @app.callback(
     Output('dashboard-content', 'children'),
@@ -168,8 +178,8 @@ def update_dashboard(tab):
                                 html.Span(f"${net_invested_breakdown['withdrawals']:,.2f}", className="float-end text-white small")
                             ], className="d-flex justify-content-between")
                         ])
-                    ])
-                ], className="h-100 shadow-sm bg-dark border-secondary")
+                    ], className="p-3")
+                ], className="glass-card h-100")
             ], width=12, md=6, lg=3, className="mb-4"),
             dbc.Col([
                 dbc.Card([
@@ -184,11 +194,11 @@ def update_dashboard(tab):
                             ], className="d-flex justify-content-between mb-1"),
                             html.Div([
                                 html.Span("Unrealized", className="text-muted small"),
-                                html.Span(f"${total_unrealized_pl:,.2f}", className=f"float-end {'text-success' if total_unrealized_pl >= 0 else 'text-danger'} small")
+                                html.Span(f"${total_unrealized_pl:,.2f}", className="float-end small", style={'color': 'var(--apple-green)' if total_unrealized_pl >= 0 else 'var(--apple-red)'})
                             ], className="d-flex justify-content-between")
                         ])
-                    ])
-                ], className="h-100 shadow-sm bg-dark border-secondary")
+                    ], className="p-3")
+                ], className="glass-card h-100")
             ], width=12, md=6, lg=3, className="mb-4"),
             dbc.Col(create_card("Personal Return (XIRR)", f"{cagr:.2f}%", f"{yoy_xirr:+.2f}% 1Y", "info"), width=12, md=6, lg=3, className="mb-4"),
             dbc.Col(create_card("Portfolio Return (TWR)", f"{lifetime_twr:.2f}%", f"{yoy_twr:+.2f}% 1Y", "success"), width=12, md=6, lg=3, className="mb-4"),
@@ -196,12 +206,10 @@ def update_dashboard(tab):
         
         dbc.Row([
             dbc.Col([
-                dbc.Card([
-                    dbc.CardBody([
-                        create_portfolio_graph(portfolio_value, net_invested)
-                    ])
-                ], className="bg-dark border-secondary shadow-sm")
-            ], width=12, className="mb-4")
+                html.Div([
+                    create_portfolio_graph(portfolio_value, net_invested)
+                ], className="glass-card p-4")
+            ], width=12, className="mb-5")
         ]),
         
         # Allocation Tab (Stock vs Industry) - MOVED TO STATIC LAYOUT
@@ -209,24 +217,20 @@ def update_dashboard(tab):
         
         dbc.Row([
             dbc.Col([
-                dbc.Card([
-                    dbc.CardBody([
-                        html.H4("Current Holdings", className="card-title text-white mb-4"),
-                        create_holdings_table(current_holdings_data)
-                    ])
-                ], className="bg-dark border-secondary shadow-sm")
-            ], width=12, className="mb-4")
+                html.Div([
+                    html.H4("Current Holdings", className="text-white mb-4"),
+                    create_holdings_table(current_holdings_data)
+                ], className="glass-card p-4")
+            ], width=12, className="mb-5")
         ]),
 
         dbc.Row([
             dbc.Col([
-                dbc.Card([
-                    dbc.CardBody([
-                        html.H4("Transaction History (Realized P/L)", className="card-title text-white mb-4"),
-                        create_history_table(realized_pnl_data)
-                    ])
-                ], className="bg-dark border-secondary shadow-sm")
-            ], width=12, className="mb-4")
+                html.Div([
+                    html.H4("Transaction History (Realized P/L)", className="text-white mb-4"),
+                    create_history_table(realized_pnl_data)
+                ], className="glass-card p-4")
+            ], width=12, className="mb-5")
         ])
     ])
 
@@ -280,7 +284,6 @@ def update_allocation_chart(allocation_tab, account_tab):
     chart = create_stock_performance_chart(holdings, global_prices) if (allocation_tab or 'stock') == 'stock' else create_industry_allocation_chart(holdings, global_prices, global_sectors)
     
     return html.Div([
-        html.H4(title, className="card-title text-white mb-4"),
         chart
     ])
 
