@@ -5,8 +5,11 @@ from datetime import datetime
 
 import glob
 import os
+import json
+import time
 
 DATA_PATH = 'data/Accounts_History*.csv'
+CACHE_PATH = 'data/sector_cache.json'
 
 def load_and_clean_data(filepath_pattern=DATA_PATH):
     """
@@ -88,10 +91,15 @@ def load_and_clean_data(filepath_pattern=DATA_PATH):
     numeric_cols = ['Quantity', 'Price', 'Amount', 'Commission', 'Fees', 'Accrued Interest']
     for col in numeric_cols:
         if col in df.columns:
-            # Remove '$' and ',' if present (though pandas might handle it, explicit is safer)
+            # Remove '$' and ',' if present
             if df[col].dtype == 'object':
                 df[col] = df[col].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # Calculate implicit price for transactions where it's missing (common in 401k)
+    mask = (df['Price'] == 0) & (df['Quantity'] != 0) & (df['Amount'] != 0)
+    if mask.any():
+        df.loc[mask, 'Price'] = (df.loc[mask, 'Amount'] / df.loc[mask, 'Quantity']).abs()
 
     return df
 
@@ -166,8 +174,9 @@ def get_portfolio_history(df):
     end_date = datetime.now()
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
     
-    # Initialize holdings: {Symbol: Quantity}
+    # Initialize holdings and cash
     current_holdings = {s: 0.0 for s in symbols}
+    cash_balance = 0.0
     
     # Store history: List of dicts, then convert to DF
     history_list = []
@@ -183,22 +192,53 @@ def get_portfolio_history(df):
             day_txs = tx_by_date.get_group(date_date)
             for _, row in day_txs.iterrows():
                 symbol = row['Symbol']
-                if pd.isna(symbol) or symbol == '':
-                    continue
-                    
                 action = row['Category']
                 qty = row['Quantity']
+                amount = row['Amount']
                 
-                if symbol not in current_holdings:
-                    current_holdings[symbol] = 0.0
+                # Update Cash Balance
+                # DEPOSIT (+), WITHDRAWAL (-), SELL (+), DIVIDEND (+), TAX (-), FEE (-)
+                # BUY (-), REINVESTMENT (- but usually net 0)
                 
-                if action in ['BUY', 'REINVESTMENT', 'DISTRIBUTION']:
-                    current_holdings[symbol] += qty
+                if action == 'DEPOSIT':
+                    cash_balance += amount
+                elif action == 'WITHDRAWAL':
+                    cash_balance += amount # amount is negative
                 elif action == 'SELL':
-                    current_holdings[symbol] += qty  # Qty is negative for sell
+                    cash_balance += amount # amount is positive
+                    if symbol in current_holdings:
+                        current_holdings[symbol] += qty # qty is negative
+                elif action == 'BUY':
+                    # For 401k, BUY is often the contribution itself (no external DEPOSIT sometimes)
+                    # Let's check Account
+                    if row.get('Account') == 'MICROSOFT 401K PLAN':
+                        # In 401k, BUY is the "inflow"
+                        # Securities increase, but cash doesn't decrease (it was never there as cash)
+                        pass 
+                    else:
+                        cash_balance += amount # amount is negative
+                        
+                    if symbol not in current_holdings:
+                        current_holdings[symbol] = 0.0
+                    current_holdings[symbol] += qty
+                elif action == 'DIVIDEND':
+                    cash_balance += amount
+                elif action == 'REINVESTMENT':
+                    # REINVESTMENT is BUY using DIVIDEND. Net cash change is 0.
+                    # Securities increase.
+                    if symbol not in current_holdings:
+                        current_holdings[symbol] = 0.0
+                    current_holdings[symbol] += qty
+                elif action == 'DISTRIBUTION':
+                    if symbol not in current_holdings:
+                        current_holdings[symbol] = 0.0
+                    current_holdings[symbol] += qty
+                elif action in ['TAX', 'FEE']:
+                    cash_balance += amount
                     
         # Store daily snapshot
         snapshot = current_holdings.copy()
+        snapshot['Cash'] = cash_balance
         snapshot['Date'] = date
         history_list.append(snapshot)
     
@@ -224,6 +264,61 @@ def get_transaction_prices(df):
     tx_prices = price_txs.pivot_table(index='Run Date', columns='Symbol', values='Price', aggfunc='last')
     
     return tx_prices
+
+def fetch_sector_data(symbols):
+    """
+    Fetches sector information for the given symbols with caching.
+    """
+    # Ensure data directory exists
+    os.makedirs('data', exist_ok=True)
+    
+    # Load cache
+    cache = {}
+    if os.path.exists(CACHE_PATH):
+        try:
+            with open(CACHE_PATH, 'r') as f:
+                cache = json.load(f)
+        except Exception as e:
+            print(f"Error loading sector cache: {e}")
+            
+    # Identify missing symbols
+    missing_symbols = [s for s in symbols if s not in cache or cache[s] == 'Unknown' or cache[s] == 'Error']
+    
+    if not missing_symbols:
+        return cache
+        
+    print(f"Fetching sector data for {len(missing_symbols)} symbols...")
+    
+    # Fetch missing data
+    updated = False
+    for i, sym in enumerate(missing_symbols):
+        try:
+            print(f"Fetching sector for {sym} ({i+1}/{len(missing_symbols)})...")
+            ticker = yf.Ticker(sym)
+            info = ticker.info
+            sector = info.get('sector', 'Unknown')
+            cache[sym] = sector
+            updated = True
+            
+            # Sleep to avoid rate limits
+            time.sleep(1.5) 
+            
+        except Exception as e:
+            print(f"Error fetching sector for {sym}: {e}")
+            cache[sym] = 'Error'
+            updated = True
+            # Still sleep on error
+            time.sleep(2)
+            
+    # Save cache if updated
+    if updated:
+        try:
+            with open(CACHE_PATH, 'w') as f:
+                json.dump(cache, f, indent=4)
+        except Exception as e:
+            print(f"Error saving sector cache: {e}")
+            
+    return cache
 
 def fetch_price_data(symbols, start_date, tx_df=None):
     """
@@ -266,16 +361,17 @@ def fetch_price_data(symbols, start_date, tx_df=None):
         'VANG RUS 1000 GR TR': 558.95
     }
     
-    # Add manual prices to market_data
+    # Initialize market_data if empty
     today = datetime.now()
+    if market_data.empty:
+        market_data = pd.DataFrame(index=pd.date_range(start=start_date, end=today, freq='D'))
+
+    # Only fill the LATEST price as a benchmark if the symbol is missing from YF
     for symbol, price in manual_prices.items():
-        if symbol in symbols:
-            # Create a series for this symbol with the current price
-            if market_data.empty:
-                market_data = pd.DataFrame(index=pd.date_range(start=start_date, end=today, freq='D'))
-            
-            # Fill the entire period with the current price (NAV doesn't change minute-to-minute)
-            market_data[symbol] = price
+        if symbol in symbols and symbol not in market_data.columns:
+            market_data[symbol] = np.nan
+            # Set only the last date with the manual price
+            market_data.iloc[-1, market_data.columns.get_loc(symbol)] = price
 
     # 2. Get Transaction Prices
     tx_prices = pd.DataFrame()
@@ -360,21 +456,27 @@ def calculate_portfolio_value(holdings_df, price_df):
     reverse_map = {v: k for k, v in ticker_map.items()}
     prices = prices.rename(columns=reverse_map)
     
-    # Ensure we only use columns present in both
-    common_cols = list(set(holdings.columns) & set(prices.columns))
+    # Ensure we only use columns present in both for security value calculation
+    ticker_cols = list(set(holdings.columns) & set(prices.columns))
+    ticker_cols = [c for c in ticker_cols if c != 'Cash']
     
-    if not common_cols:
+    if not ticker_cols and 'Cash' not in holdings.columns:
         return pd.Series(0.0, index=common_dates)
         
-    holdings = holdings[common_cols]
-    prices = prices[common_cols]
-    
-    # Calculate value
-    # fillna(0) for prices to avoid NaN propagating (though 0 price is also wrong, but better than crashing)
     prices = prices.ffill()
     
-    val_df = holdings * prices
-    portfolio_value = val_df.sum(axis=1)
+    # Value of securities
+    if ticker_cols:
+        val_df = holdings[ticker_cols] * prices[ticker_cols]
+        securities_value = val_df.sum(axis=1)
+    else:
+        securities_value = pd.Series(0.0, index=common_dates)
+    
+    # Add cash (use original holdings_df where Cash is guaranteed to exist if tracked)
+    if 'Cash' in holdings_df.columns:
+        portfolio_value = securities_value + holdings_df.loc[common_dates, 'Cash']
+    else:
+        portfolio_value = securities_value
             
     return portfolio_value
 
