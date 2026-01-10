@@ -3,6 +3,45 @@ import numpy as np
 from scipy import optimize
 from datetime import datetime
 
+def calculate_twr(portfolio_series, daily_cash_flows):
+    """
+    Calculate the Time-Weighted Return (TWR).
+    TWR = Product (Ending Value / (Beginning Value + Net Cash Flow)) - 1
+    """
+    if portfolio_series.empty or (portfolio_series <= 0).all():
+        return None
+        
+    # Trim to start from first non-zero value
+    first_idx = portfolio_series[portfolio_series > 0].index[0]
+    p_series = portfolio_series[portfolio_series.index >= first_idx]
+    
+    if len(p_series) < 2:
+        return None
+        
+    # Reindex flows to match portfolio dates
+    flows = daily_cash_flows.reindex(p_series.index, fill_value=0.0)
+    
+    # Previous day's value
+    prev_val = p_series.shift(1)
+    
+    # Daily returns
+    denom = prev_val + flows
+    
+    # We only care about days where we actually have capital and a previous day value
+    # AND where denom is not zero.
+    mask = (denom > 0) & (p_series > 0) & (prev_val.notna())
+    
+    # Calculate returns for valid days
+    day_rets = p_series[mask] / denom[mask]
+    
+    if day_rets.empty:
+        return None
+        
+    # Geometrically link
+    total_twr = day_rets.prod() - 1
+    
+    return total_twr
+
 def xnpv(rate, values, dates):
     """
     Calculate the Net Present Value for a schedule of cash flows.
@@ -16,95 +55,84 @@ def calculate_xirr(values, dates):
     """
     Calculate the Internal Rate of Return for a schedule of cash flows.
     """
+    if len(values) < 2:
+        return None
+        
+    # Check if we have both positive and negative values (required for IRR)
+    if all(v >= 0 for v in values) or all(v <= 0 for v in values):
+        return None
+
     try:
+        # Try with a default guess
         return optimize.newton(lambda r: xnpv(r, values, dates), 0.1)
-    except RuntimeError:
+    except (RuntimeError, OverflowError):
+        # Try with different guesses if it fails to converge
+        for guess in [-0.1, 0.0, 0.2, 0.5]:
+            try:
+                return optimize.newton(lambda r: xnpv(r, values, dates), guess)
+            except (RuntimeError, OverflowError):
+                continue
         return None
 
 def calculate_cagr(start_value, end_value, years):
     """
     Calculate Compound Annual Growth Rate.
     """
-    if start_value <= 0 or years <= 0:
+    if start_value <= 0 or end_value <= 0 or years <= 0:
         return 0.0
     return (end_value / start_value) ** (1 / years) - 1
 
-def calculate_period_returns(portfolio_series):
+def get_daily_cash_flows(df):
     """
-    Calculates MoM, WoW, YoY returns based on the portfolio value series.
-    Returns a dictionary of percentage changes.
-    """
-    if portfolio_series.empty:
-        return {}
-        
-    current_val = portfolio_series.iloc[-1]
-    current_date = portfolio_series.index[-1]
-    
-    returns = {}
-    
-    # Define periods
-    periods = {
-        '1W': pd.Timedelta(weeks=1),
-        '1M': pd.Timedelta(days=30),
-        '3M': pd.Timedelta(days=90),
-        '6M': pd.Timedelta(days=180),
-        '1Y': pd.Timedelta(days=365),
-        'YTD': None # Special case
-    }
-    
-    for label, delta in periods.items():
-        if label == 'YTD':
-            start_of_year = pd.Timestamp(year=current_date.year, month=1, day=1)
-            # Find closest date
-            idx = portfolio_series.index.searchsorted(start_of_year)
-            if idx < len(portfolio_series):
-                prev_val = portfolio_series.iloc[idx]
-                returns[label] = (current_val - prev_val) / prev_val if prev_val != 0 else 0
-        else:
-            target_date = current_date - delta
-            # Find closest date
-            idx = portfolio_series.index.searchsorted(target_date)
-            if idx < len(portfolio_series):
-                # Check if the date is reasonably close (e.g. within a few days)
-                # If the history is short, searchsorted might return 0
-                prev_val = portfolio_series.iloc[idx]
-                returns[label] = (current_val - prev_val) / prev_val if prev_val != 0 else 0
-            else:
-                returns[label] = None # Not enough history
-                
-    return returns
-
-def calculate_net_invested(df):
-    """
-    Calculates the cumulative net invested capital (Deposits - Withdrawals) over time.
-    For 401k, BUY transactions are contributions and should count as deposits.
+    Extracts daily cash flows from the transactions dataframe.
     """
     if df.empty:
         return pd.Series(dtype=float)
 
-    # Filter for Deposits, Withdrawals, and 401k BUY contributions only
+    # Filter for Deposits, Withdrawals, and 401k BUY contributions
     # We include BUY rows only when they belong to the 401k account (i.e., contributions)
     transfers = df[df['Category'].isin(['DEPOSIT', 'WITHDRAWAL', 'BUY'])].copy()
     
-    # Create a daily series
+    if transfers.empty:
+        return pd.Series(dtype=float)
+        
+    # Create daily flows
+    # Use the transactions' actual dates
+    flows = []
+    for _, row in transfers.iterrows():
+        amount = 0
+        if row['Category'] == 'BUY':
+            if row.get('Account') == 'MICROSOFT 401K PLAN':
+                amount = abs(row['Amount'])
+        else:
+            amount = row['Amount']
+        
+        if amount != 0:
+            flows.append({'Date': row['Run Date'], 'Amount': amount})
+            
+    if not flows:
+        return pd.Series(dtype=float)
+        
+    flow_df = pd.DataFrame(flows)
+    daily_flow = flow_df.groupby('Date')['Amount'].sum()
+    
+    return daily_flow
+
+def calculate_net_invested(df):
+    """
+    Calculates the cumulative net invested capital (Deposits - Withdrawals) over time.
+    """
+    daily_flow = get_daily_cash_flows(df)
+    if daily_flow.empty:
+        return pd.Series(dtype=float)
+        
+    # Reindex to full date range to match portfolio history
     start_date = df['Run Date'].min()
     end_date = datetime.now()
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
     
-    daily_flow = pd.Series(0.0, index=date_range)
-    
-    for _, row in transfers.iterrows():
-        date = row['Run Date']
-        if row['Category'] == 'BUY':
-            # Only count BUY as a cash inflow when it is a 401k contribution (Account is 401k)
-            if row.get('Account') == 'MICROSOFT 401K PLAN':
-                daily_flow[date] += abs(row['Amount'])
-        else:
-            # DEPOSIT is positive, WITHDRAWAL is negative
-            daily_flow[date] += row['Amount']
-    
-    # Cumulative sum to get total invested over time
-    net_invested = daily_flow.cumsum()
+    daily_flow_full = daily_flow.reindex(date_range, fill_value=0.0)
+    net_invested = daily_flow_full.cumsum()
     
     return net_invested
 
@@ -147,6 +175,78 @@ def calculate_net_invested_breakdown(df):
         'withdrawals': withdrawals,
         'total': transfers + espp + contributions + withdrawals
     }
+
+def calculate_performance_metrics(portfolio_series, daily_cash_flows):
+    """
+    Calculates performance metrics (XIRR) for different periods.
+    """
+    if portfolio_series.empty:
+        return {}
+        
+    current_val = portfolio_series.iloc[-1]
+    current_date = portfolio_series.index[-1]
+    
+    metrics = {}
+    
+    # 1. Lifetime XIRR
+    all_dates = list(daily_cash_flows.index)
+    all_values = [-v for v in daily_cash_flows.values] # Deposits are negative out-flows for IRR
+    
+    # Add current value as a positive in-flow at the end
+    all_dates.append(current_date)
+    all_values.append(current_val)
+    
+    metrics['Lifetime_XIRR'] = calculate_xirr(all_values, all_dates)
+    metrics['Lifetime_TWR'] = calculate_twr(portfolio_series, daily_cash_flows)
+    
+    # 2. Periodic Metrics (1Y, YTD, etc.)
+    periods = {
+        '1Y': pd.Timedelta(days=365),
+        'YTD': None
+    }
+    
+    for label, delta in periods.items():
+        if label == 'YTD':
+            start_date = pd.Timestamp(year=current_date.year, month=1, day=1)
+        else:
+            start_date = current_date - delta
+            
+        # Find portfolio value at start_date
+        idx = portfolio_series.index.searchsorted(start_date)
+        if idx < len(portfolio_series):
+            actual_start_date = portfolio_series.index[idx]
+            
+            # Period data
+            p_series = portfolio_series[portfolio_series.index >= actual_start_date]
+            p_flows = daily_cash_flows[daily_cash_flows.index >= actual_start_date].copy()
+            
+            # For XIRR, the "start value" is treated as the first deposit
+            p_xirr_values = [-p_series.iloc[0]]
+            p_xirr_dates = [actual_start_date]
+            
+            # Intermediate flows (exclude the very first day's flow if it's already in p_series.iloc[0])
+            # Wait, daily_cash_flows already has the external flow. 
+            # If we start "as of" start_date, the flow *on* that day is usually included in start_val.
+            # So we only include flows *after* start_date.
+            sub_flows = daily_cash_flows[daily_cash_flows.index > actual_start_date]
+            for d, v in sub_flows.items():
+                p_xirr_values.append(-v)
+                p_xirr_dates.append(d)
+                
+            p_xirr_values.append(current_val)
+            p_xirr_dates.append(current_date)
+            
+            metrics[f'{label}_XIRR'] = calculate_xirr(p_xirr_values, p_xirr_dates)
+            
+            # For TWR, we just use the subset
+            # But the very first flow in p_flows is technically external to the sub-period's return
+            # TWR sub-period starts at the *end* of the first day.
+            metrics[f'{label}_TWR'] = calculate_twr(p_series, sub_flows)
+        else:
+            metrics[f'{label}_XIRR'] = None
+            metrics[f'{label}_TWR'] = None
+            
+    return metrics
 
 def calculate_cost_basis(df):
     """

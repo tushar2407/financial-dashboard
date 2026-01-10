@@ -218,7 +218,7 @@ def create_stock_performance_chart(holdings, prices):
     return dcc.Graph(figure=fig, className="graph-container", style={'height': '600px','width':'100%'} )
 
 
-def create_industry_allocation_chart(holdings, prices):
+def create_industry_allocation_chart(holdings, prices, sector_data):
     """
     Generate an industry‑wise allocation pie chart.
     Small sectors (<2% of total) are grouped into 'Other'.
@@ -240,15 +240,10 @@ def create_industry_allocation_chart(holdings, prices):
     if not symbol_values:
         return html.Div("No data available", className="text-white")
 
-    # Map symbols to sectors using yfinance
+    # Map symbols to sectors using provided sector_data
     sector_map = {}
     for sym in symbol_values:
-        try:
-            info = yf.Ticker(sym).info
-            sector = info.get('sector', 'Unknown')
-        except Exception:
-            sector = 'Unknown'
-        sector_map[sym] = sector
+        sector_map[sym] = sector_data.get(sym, 'Unknown')
 
     # Aggregate values per sector
     sector_values = {}

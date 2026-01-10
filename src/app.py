@@ -3,8 +3,8 @@ from dash import html, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output
 import pandas as pd
-from data_loader import load_and_clean_data, categorize_transactions, get_portfolio_history, fetch_price_data, calculate_portfolio_value
-from metrics import calculate_xirr, calculate_cagr, calculate_net_invested, calculate_period_returns, calculate_cost_basis, calculate_net_invested_breakdown
+from data_loader import load_and_clean_data, categorize_transactions, get_portfolio_history, fetch_price_data, calculate_portfolio_value, fetch_sector_data
+from metrics import calculate_xirr, calculate_cagr, calculate_net_invested, calculate_cost_basis, calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics
 from components import create_card, create_portfolio_graph, create_stock_performance_chart, create_holdings_table, create_history_table, create_industry_allocation_chart
 
 # Load Data Globally (to avoid reloading on every callback)
@@ -17,6 +17,7 @@ all_symbols = global_df['Symbol'].dropna().unique()
 all_symbols = [s for s in all_symbols if isinstance(s, str) and s.strip() != '']
 start_date = global_df['Run Date'].min().strftime('%Y-%m-%d')
 global_prices = fetch_price_data(all_symbols, start_date, tx_df=global_df)
+global_sectors = fetch_sector_data(all_symbols)
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY], suppress_callback_exceptions=True)
 server = app.server
@@ -92,18 +93,21 @@ def update_dashboard(tab):
     pl = current_val - total_invested
     pl_pct = (pl / total_invested * 100) if total_invested != 0 else 0
 
-    # Period Returns
-    returns = calculate_period_returns(portfolio_value)
-    mom = returns.get('1M', 0) * 100 if returns.get('1M') is not None else 0
-    yoy = returns.get('1Y', 0) * 100 if returns.get('1Y') is not None else 0
-
-    # CAGR
-    if not portfolio_value.empty and total_invested > 0:
-        days = (portfolio_value.index[-1] - portfolio_value.index[0]).days
-        years = days / 365.25
-        cagr = calculate_cagr(total_invested, current_val, years) * 100
-    else:
-        cagr = 0
+    # XIRR Metrics
+    daily_flows = get_daily_cash_flows(df)
+    perf_metrics = calculate_performance_metrics(portfolio_value, daily_flows)
+    
+    # Lifetime metrics
+    cagr = perf_metrics.get('Lifetime_XIRR', 0) * 100
+    lifetime_twr = perf_metrics.get('Lifetime_TWR', 0) * 100
+    
+    # 1Y metrics
+    yoy_xirr = perf_metrics.get('1Y_XIRR', 0) * 100
+    yoy_twr = perf_metrics.get('1Y_TWR', 0) * 100
+    
+    # YTD metrics
+    ytd_xirr = perf_metrics.get('YTD_XIRR', 0) * 100
+    ytd_twr = perf_metrics.get('YTD_TWR', 0) * 100
 
     # Detailed Holdings & History
     current_holdings_data, realized_pnl_data = calculate_cost_basis(df)
@@ -186,7 +190,8 @@ def update_dashboard(tab):
                     ])
                 ], className="h-100 shadow-sm bg-dark border-secondary")
             ], width=12, md=6, lg=3, className="mb-4"),
-            dbc.Col(create_card("CAGR", f"{cagr:.2f}%", f"{yoy:+.2f}% YoY", "info"), width=12, md=6, lg=3, className="mb-4"),
+            dbc.Col(create_card("Personal Return (XIRR)", f"{cagr:.2f}%", f"{yoy_xirr:+.2f}% 1Y", "info"), width=12, md=6, lg=3, className="mb-4"),
+            dbc.Col(create_card("Portfolio Return (TWR)", f"{lifetime_twr:.2f}%", f"{yoy_twr:+.2f}% 1Y", "success"), width=12, md=6, lg=3, className="mb-4"),
         ]),
         
         dbc.Row([
@@ -272,7 +277,7 @@ def update_allocation_chart(allocation_tab, account_tab):
     
     # Render
     title = "Stock Allocation" if (allocation_tab or 'stock') == 'stock' else "Industry Allocation"
-    chart = create_stock_performance_chart(holdings, global_prices) if (allocation_tab or 'stock') == 'stock' else create_industry_allocation_chart(holdings, global_prices)
+    chart = create_stock_performance_chart(holdings, global_prices) if (allocation_tab or 'stock') == 'stock' else create_industry_allocation_chart(holdings, global_prices, global_sectors)
     
     return html.Div([
         html.H4(title, className="card-title text-white mb-4"),
