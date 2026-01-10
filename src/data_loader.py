@@ -282,6 +282,7 @@ def fetch_sector_data(symbols):
     
     # Load cache
     cache = {}
+    updated = False
     if os.path.exists(CACHE_PATH):
         try:
             with open(CACHE_PATH, 'r') as f:

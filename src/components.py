@@ -15,12 +15,12 @@ def create_card(title, value, subtitle=None, color="primary"):
     
     return dbc.Card(
         dbc.CardBody([
-            html.H6(title, className="card-subtitle mb-2 text-muted text-uppercase"),
-            html.H2(value, className="card-title text-white"),
-            html.P(subtitle, className=f"card-text {subtitle_color}") if subtitle else None
-        ]),
-        className="h-100 shadow-sm bg-dark border-secondary",
-        id=title.lower().replace(" ", "-") + "-card" # Add ID for tooltip targeting
+            html.H6(title, className="card-subtitle mb-2 text-muted text-uppercase small font-weight-bold"),
+            html.H2(value, className="card-title text-white mb-1"),
+            html.P(subtitle, className=f"card-text {subtitle_color} small mb-0") if subtitle else None
+        ], className="p-3"),
+        className="glass-card h-100",
+        id=title.lower().replace(" ", "-") + "-card"
     )
 
 def create_portfolio_graph(portfolio_value, net_invested):
@@ -78,13 +78,13 @@ def create_portfolio_graph(portfolio_value, net_invested):
             y=portfolio_value.values, 
             name='Portfolio Value', 
             fill='tozeroy',
-            line=dict(color='#00d084', width=2),
+            line=dict(color='#34c759', width=3), # Apple Green
             hovertext=hover_text,
             hoverinfo='text',
             hoverlabel=dict(
-                bgcolor='#1e1e1e',
+                bgcolor='rgba(30, 30, 30, 0.9)',
                 font=dict(color='white', size=14),
-                bordercolor='#00d084'
+                bordercolor='#34c759'
             ),
             yaxis='y'
         ))
@@ -138,8 +138,8 @@ def create_portfolio_graph(portfolio_value, net_invested):
         yaxis=dict(
             title='Value ($)', 
             showgrid=True, 
-            gridcolor='rgba(255,255,255,0.1)', 
-            color='white',
+            gridcolor='rgba(255,255,255,0.05)', 
+            color='rgba(255,255,255,0.6)',
             title_font=dict(size=14)
         ),
         yaxis2=dict(
@@ -212,8 +212,9 @@ def create_stock_performance_chart(holdings, prices):
         plot_bgcolor='rgba(0,0,0,0)',
         height=600,  # Increased to 600px
         width=800,   # Add explicit width
-        margin=dict(l=80, r=80, t=80, b=80),  # Increased margins for labels
-        showlegend=False
+        margin=dict(l=80, r=80, t=80, b=80), 
+        showlegend=True,
+        legend=dict(font=dict(color='rgba(255,255,255,0.7)'))
     )
     return dcc.Graph(figure=fig, className="graph-container", style={'height': '600px','width':'100%'} )
 
@@ -296,64 +297,32 @@ def create_holdings_table(holdings_data):
     # Format columns
     # Expected cols: Symbol, Quantity, Avg Cost, Total Cost, Current Price, Market Value, Unrealized P/L, P/L %
     
-    columns = [
-        {"name": "Symbol", "id": "Symbol"},
-        {"name": "Qty", "id": "Quantity", "type": "numeric", "format": {"specifier": ".2f"}},
-        {"name": "Avg Cost", "id": "Avg Cost", "type": "numeric", "format": {"specifier": "$,.2f"}},
-        {"name": "Current Price", "id": "Current Price", "type": "numeric", "format": {"specifier": "$,.2f"}},
-        {"name": "Market Value", "id": "Market Value", "type": "numeric", "format": {"specifier": "$,.2f"}},
-        {"name": "Unrealized P/L", "id": "Unrealized P/L", "type": "numeric", "format": {"specifier": "$,.2f"}},
-        {"name": "P/L %", "id": "P/L %", "type": "numeric", "format": {"specifier": ".2%"}},
-    ]
-    
-    return dash_table.DataTable(
-        data=df.to_dict('records'),
-        columns=columns,
-        sort_action="native",
-        style_as_list_view=True,
-        style_header={
-            'backgroundColor': '#1e1e1e',
-            'fontWeight': 'bold',
-            'color': 'white',
-            'border': '1px solid #333'
-        },
-        style_cell={
-            'backgroundColor': '#121212',
-            'color': '#e0e0e0',
-            'border': '1px solid #333',
-            'padding': '10px'
-        },
-        style_data_conditional=[
-            {
-                'if': {
-                    'filter_query': '{Unrealized P/L} >= 0',
-                    'column_id': 'Unrealized P/L'
-                },
-                'color': '#00d084'
-            },
-            {
-                'if': {
-                    'filter_query': '{Unrealized P/L} < 0',
-                    'column_id': 'Unrealized P/L'
-                },
-                'color': '#cf2e2e'
-            },
-            {
-                'if': {
-                    'filter_query': '{P/L %} >= 0',
-                    'column_id': 'P/L %'
-                },
-                'color': '#00d084'
-            },
-            {
-                'if': {
-                    'filter_query': '{P/L %} < 0',
-                    'column_id': 'P/L %'
-                },
-                'color': '#cf2e2e'
-            }
-        ]
-    )
+    # Create headers
+    header = [html.Thead(html.Tr([
+        html.Th("Symbol", style={'border': 'none'}),
+        html.Th("Qty", className="text-end", style={'border': 'none'}),
+        html.Th("Avg Cost", className="text-end", style={'border': 'none'}),
+        html.Th("Current Price", className="text-end", style={'border': 'none'}),
+        html.Th("Market Value", className="text-end", style={'border': 'none'}),
+        html.Th("Unrealized P/L", className="text-end", style={'border': 'none'}),
+        html.Th("P/L %", className="text-end", style={'border': 'none'}),
+    ]))]
+
+    # Create rows
+    rows = []
+    for _, row in df.iterrows():
+        pl_color = "var(--apple-green)" if row['Unrealized P/L'] >= 0 else "var(--apple-red)"
+        rows.append(html.Tr([
+            html.Td(row['Symbol'], className="font-weight-bold"),
+            html.Td(f"{row['Quantity']:.2f}", className="text-end"),
+            html.Td(f"${row['Avg Cost']:.2f}", className="text-end"),
+            html.Td(f"${row['Current Price']:.2f}", className="text-end"),
+            html.Td(f"${row['Market Value']:,.2f}", className="text-end"),
+            html.Td(f"${row['Unrealized P/L']:,.2f}", className="text-end", style={'color': pl_color}),
+            html.Td(f"{row['P/L %']:.2%}", className="text-end", style={'color': pl_color}),
+        ]))
+
+    return dbc.Table(header + [html.Tbody(rows)], className="glass-table mb-0", hover=True, responsive=True, borderless=True)
 
 def create_history_table(history_data):
     if not history_data:
@@ -361,55 +330,46 @@ def create_history_table(history_data):
         
     df = pd.DataFrame(history_data)
     
+    if not df.empty and 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+    
     # Add summary row
     total_pnl = df['Realized P/L'].sum()
     
-    # Format columns
-    columns = [
-        {"name": "Date", "id": "Date", "type": "datetime"},
-        {"name": "Symbol", "id": "Symbol"},
-        {"name": "Qty Sold", "id": "Qty", "type": "numeric", "format": {"specifier": ".2f"}},
-        {"name": "Sell Price", "id": "Sell Price", "type": "numeric", "format": {"specifier": "$,.2f"}},
-        {"name": "Cost Basis", "id": "Cost Basis", "type": "numeric", "format": {"specifier": "$,.2f"}},
-        {"name": "Proceeds", "id": "Proceeds", "type": "numeric", "format": {"specifier": "$,.2f"}},
-        {"name": "Realized P/L", "id": "Realized P/L", "type": "numeric", "format": {"specifier": "$,.2f"}},
-    ]
-    
+    # Create headers
+    header = [html.Thead(html.Tr([
+        html.Th("Date", style={'border': 'none'}),
+        html.Th("Symbol", style={'border': 'none'}),
+        html.Th("Qty", className="text-end", style={'border': 'none'}),
+        html.Th("Price", className="text-end", style={'border': 'none'}),
+        html.Th("Cost", className="text-end", style={'border': 'none'}),
+        html.Th("Proceeds", className="text-end", style={'border': 'none'}),
+        html.Th("Realized P/L", className="text-end", style={'border': 'none'}),
+    ]))]
+
+    # Create rows
+    rows = []
+    # Sort history by date descending
+    df = df.sort_values('Date', ascending=False)
+    for _, row in df.iterrows():
+        pl_color = "var(--apple-green)" if row['Realized P/L'] >= 0 else "var(--apple-red)"
+        rows.append(html.Tr([
+            html.Td(row['Date'], className="text-muted small"),
+            html.Td(row['Symbol'], className="font-weight-bold"),
+            html.Td(f"{row['Qty']:.2f}", className="text-end"),
+            html.Td(f"${row['Sell Price']:.2f}", className="text-end"),
+            html.Td(f"${row['Cost Basis']:,.2f}", className="text-end"),
+            html.Td(f"${row['Proceeds']:,.2f}", className="text-end"),
+            html.Td(f"${row['Realized P/L']:,.2f}", className="text-end", style={'color': pl_color}),
+        ]))
+
     return html.Div([
-        html.H5(f"Total Realized P/L: ${total_pnl:,.2f}", className=f"mb-3 {'text-success' if total_pnl >= 0 else 'text-danger'}"),
-        dash_table.DataTable(
-            data=df.to_dict('records'),
-            columns=columns,
-            sort_action="native",
-            page_size=10,
-            style_as_list_view=True,
-            style_header={
-                'backgroundColor': '#1e1e1e',
-                'fontWeight': 'bold',
-                'color': 'white',
-                'border': '1px solid #333'
-            },
-            style_cell={
-                'backgroundColor': '#121212',
-                'color': '#e0e0e0',
-                'border': '1px solid #333',
-                'padding': '10px'
-            },
-            style_data_conditional=[
-                {
-                    'if': {
-                        'filter_query': '{Realized P/L} >= 0',
-                        'column_id': 'Realized P/L'
-                    },
-                    'color': '#00d084'
-                },
-                {
-                    'if': {
-                        'filter_query': '{Realized P/L} < 0',
-                        'column_id': 'Realized P/L'
-                    },
-                    'color': '#cf2e2e'
-                }
-            ]
-        )
+        html.Div([
+            html.H5(f"Total Realized P/L: ${total_pnl:,.2f}", 
+                    className=f"mb-4 {'text-success' if total_pnl >= 0 else 'text-danger'}",
+                    style={'fontWeight': '700'}),
+            html.Div([
+                dbc.Table(header + [html.Tbody(rows)], className="glass-table mb-0", hover=True, responsive=True, borderless=True)
+            ], style={'maxHeight': '500px', 'overflowY': 'auto', 'paddingRight': '10px'})
+        ])
     ])
