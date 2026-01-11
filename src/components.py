@@ -294,35 +294,44 @@ def create_holdings_table(holdings_data):
         
     df = pd.DataFrame(holdings_data)
     
-    # Format columns
-    # Expected cols: Symbol, Quantity, Avg Cost, Total Cost, Current Price, Market Value, Unrealized P/L, P/L %
+    # Custom Header for dbc.Table
+    header = html.Thead(html.Tr([
+        html.Th("Symbol", style={'textAlign': 'left'}),
+        html.Th("Qty", style={'textAlign': 'right'}),
+        html.Th("Avg Cost", style={'textAlign': 'right'}),
+        html.Th("Price", style={'textAlign': 'right'}),
+        html.Th("Value", style={'textAlign': 'right'}),
+        html.Th("P/L", style={'textAlign': 'right'}),
+        html.Th("%", style={'textAlign': 'right'}),
+    ]))
     
-    # Create headers
-    header = [html.Thead(html.Tr([
-        html.Th("Symbol", style={'border': 'none'}),
-        html.Th("Qty", className="text-end", style={'border': 'none'}),
-        html.Th("Avg Cost", className="text-end", style={'border': 'none'}),
-        html.Th("Current Price", className="text-end", style={'border': 'none'}),
-        html.Th("Market Value", className="text-end", style={'border': 'none'}),
-        html.Th("Unrealized P/L", className="text-end", style={'border': 'none'}),
-        html.Th("P/L %", className="text-end", style={'border': 'none'}),
-    ]))]
-
-    # Create rows
+    # Custom Rows with Conditional Styling
     rows = []
     for _, row in df.iterrows():
-        pl_color = "var(--apple-green)" if row['Unrealized P/L'] >= 0 else "var(--apple-red)"
+        pl = row['Unrealized P/L']
+        pl_pct = row['P/L %']
+        pl_color = "var(--apple-green)" if pl >= 0 else "var(--apple-red)"
+        
         rows.append(html.Tr([
-            html.Td(row['Symbol'], className="font-weight-bold"),
-            html.Td(f"{row['Quantity']:.2f}", className="text-end"),
-            html.Td(f"${row['Avg Cost']:.2f}", className="text-end"),
-            html.Td(f"${row['Current Price']:.2f}", className="text-end"),
-            html.Td(f"${row['Market Value']:,.2f}", className="text-end"),
-            html.Td(f"${row['Unrealized P/L']:,.2f}", className="text-end", style={'color': pl_color}),
-            html.Td(f"{row['P/L %']:.2%}", className="text-end", style={'color': pl_color}),
+            html.Td(row['Symbol'], style={'textAlign': 'left', 'fontWeight': '600'}),
+            html.Td(f"{row['Quantity']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${row['Avg Cost']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${row['Current Price']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${row['Market Value']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${pl:+,.2f}", style={'textAlign': 'right', 'color': pl_color, 'fontWeight': '600'}),
+            html.Td(f"{pl_pct:+.2%}", style={'textAlign': 'right', 'color': pl_color, 'fontWeight': '600'}),
         ]))
-
-    return dbc.Table(header + [html.Tbody(rows)], className="glass-table mb-0", hover=True, responsive=True, borderless=True)
+    
+    return html.Div([
+        dbc.Table(
+            [header, html.Tbody(rows)],
+            id="holdings-table",
+            className="glass-table",
+            responsive=True,
+            hover=True,
+            borderless=True
+        )
+    ], className="table-responsive")
 
 def create_history_table(history_data):
     if not history_data:
@@ -333,43 +342,49 @@ def create_history_table(history_data):
     if not df.empty and 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
     
-    # Add summary row
     total_pnl = df['Realized P/L'].sum()
     
-    # Create headers
-    header = [html.Thead(html.Tr([
-        html.Th("Date", style={'border': 'none'}),
-        html.Th("Symbol", style={'border': 'none'}),
-        html.Th("Qty", className="text-end", style={'border': 'none'}),
-        html.Th("Price", className="text-end", style={'border': 'none'}),
-        html.Th("Cost", className="text-end", style={'border': 'none'}),
-        html.Th("Proceeds", className="text-end", style={'border': 'none'}),
-        html.Th("Realized P/L", className="text-end", style={'border': 'none'}),
-    ]))]
-
-    # Create rows
+    # Custom Header
+    header = html.Thead(html.Tr([
+        html.Th("Date", style={'textAlign': 'left'}),
+        html.Th("Symbol", style={'textAlign': 'left'}),
+        html.Th("Qty", style={'textAlign': 'right'}),
+        html.Th("Price", style={'textAlign': 'right'}),
+        html.Th("Cost", style={'textAlign': 'right'}),
+        html.Th("Proceeds", style={'textAlign': 'right'}),
+        html.Th("Realized P/L", style={'textAlign': 'right'}),
+    ]))
+    
+    # Custom Rows
     rows = []
-    # Sort history by date descending
-    df = df.sort_values('Date', ascending=False)
     for _, row in df.iterrows():
-        pl_color = "var(--apple-green)" if row['Realized P/L'] >= 0 else "var(--apple-red)"
+        pl = row['Realized P/L']
+        pl_color = "var(--apple-green)" if pl >= 0 else "var(--apple-red)"
+        
         rows.append(html.Tr([
-            html.Td(row['Date'], className="text-muted small"),
-            html.Td(row['Symbol'], className="font-weight-bold"),
-            html.Td(f"{row['Qty']:.2f}", className="text-end"),
-            html.Td(f"${row['Sell Price']:.2f}", className="text-end"),
-            html.Td(f"${row['Cost Basis']:,.2f}", className="text-end"),
-            html.Td(f"${row['Proceeds']:,.2f}", className="text-end"),
-            html.Td(f"${row['Realized P/L']:,.2f}", className="text-end", style={'color': pl_color}),
+            html.Td(row['Date'], style={'textAlign': 'left'}),
+            html.Td(row['Symbol'], style={'textAlign': 'left', 'fontWeight': '600'}),
+            html.Td(f"{row['Qty']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${row['Sell Price']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${row['Cost Basis']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${row['Proceeds']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${pl:+,.2f}", style={'textAlign': 'right', 'color': pl_color, 'fontWeight': '600'}),
         ]))
 
     return html.Div([
+        html.H5(f"Total Realized P/L: ${total_pnl:,.2f}", 
+                className=f"mb-4 {'text-success' if total_pnl >= 0 else 'text-danger'}",
+                style={'fontWeight': '700'}),
+        # Scrollable container for History Table
         html.Div([
-            html.H5(f"Total Realized P/L: ${total_pnl:,.2f}", 
-                    className=f"mb-4 {'text-success' if total_pnl >= 0 else 'text-danger'}",
-                    style={'fontWeight': '700'}),
-            html.Div([
-                dbc.Table(header + [html.Tbody(rows)], className="glass-table mb-0", hover=True, responsive=True, borderless=True)
-            ], style={'maxHeight': '500px', 'overflowY': 'auto', 'paddingRight': '10px'})
-        ])
+            dbc.Table(
+                [header, html.Tbody(rows)],
+                id="history-table",
+                className="glass-table mb-0",
+                responsive=True,
+                hover=True,
+                borderless=True
+            )
+        ], style={'maxHeight': '500px', 'overflowY': 'auto', 'borderRadius': '12px'})
     ])
+
