@@ -248,6 +248,84 @@ def calculate_performance_metrics(portfolio_series, daily_cash_flows):
             
     return metrics
 
+def calculate_yearly_returns(portfolio_series, daily_cash_flows):
+    """
+    Calculates XIRR and TWR for each calendar year in the data.
+    """
+    if portfolio_series.empty:
+        return []
+        
+    start_year = portfolio_series.index.year.min()
+    current_year = datetime.now().year
+    
+    yearly_metrics = []
+    
+    # Exclude current year as it's partial/non-representative for annual comparison
+    for year in range(start_year, current_year):
+        year_start = pd.Timestamp(year=year, month=1, day=1)
+        year_end = pd.Timestamp(year=year, month=12, day=31)
+        
+        # Adjust start/end to data range
+        calc_start = max(year_start, portfolio_series.index.min())
+        calc_end = min(year_end, portfolio_series.index.max())
+        
+        if calc_start >= calc_end:
+             continue
+             
+        # Find portfolio value at calc_start
+        # If calc_start is absolute min, start_val is 0
+        if calc_start == portfolio_series.index.min():
+            start_val = 0
+        else:
+            # Value at the end of the day BEFORE calc_start
+            idx = portfolio_series.index.searchsorted(calc_start)
+            if idx > 0:
+                start_val = portfolio_series.iloc[idx-1]
+            else:
+                start_val = portfolio_series.iloc[0]
+            
+        # End val
+        idx_end = portfolio_series.index.searchsorted(calc_end)
+        end_val = portfolio_series.iloc[idx_end] if idx_end < len(portfolio_series) else portfolio_series.iloc[-1]
+        
+        # Flows within the year
+        year_flows = daily_cash_flows[(daily_cash_flows.index >= calc_start) & (daily_cash_flows.index <= calc_end)]
+        
+        # XIRR
+        xirr_values = []
+        xirr_dates = []
+        
+        if start_val > 0:
+            xirr_values.append(-start_val)
+            xirr_dates.append(calc_start)
+        
+        # Intermediate flows
+        for d, v in year_flows.items():
+            # If we already have a start_val on this date, we don't want to double count
+            # Actually, the start_val is at the BEGINNING of calc_start (end of prev day)
+            # and year_flows are the flows ON calc_start. So we should include them.
+            xirr_values.append(-v)
+            xirr_dates.append(d)
+            
+        xirr_values.append(end_val)
+        xirr_dates.append(calc_end)
+        
+        year_xirr = calculate_xirr(xirr_values, xirr_dates)
+        
+        # TWR
+        # Portfolio subset
+        p_sub = portfolio_series[(portfolio_series.index >= calc_start) & (portfolio_series.index <= calc_end)]
+        # TWR needs the flow on the same day as the portfolio value change
+        year_twr = calculate_twr(p_sub, year_flows)
+        
+        yearly_metrics.append({
+            'Year': year,
+            'XIRR': year_xirr if year_xirr is not None else 0,
+            'TWR': year_twr if year_twr is not None else 0
+        })
+        
+    return yearly_metrics
+
 def calculate_cost_basis(df):
     """
     Calculates FIFO cost basis, realized P/L, and current holdings.
