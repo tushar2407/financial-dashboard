@@ -4,8 +4,8 @@ import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output
 import pandas as pd
 from data_loader import load_and_clean_data, categorize_transactions, get_portfolio_history, fetch_price_data, calculate_portfolio_value, fetch_sector_data
-from metrics import calculate_xirr, calculate_cagr, calculate_net_invested, calculate_cost_basis, calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics
-from components import create_card, create_portfolio_graph, create_stock_performance_chart, create_holdings_table, create_history_table, create_industry_allocation_chart
+from metrics import calculate_xirr, calculate_cagr, calculate_net_invested, calculate_cost_basis, calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics, calculate_yearly_returns
+from components import create_card, create_portfolio_graph, create_stock_performance_chart, create_holdings_table, create_history_table, create_industry_allocation_chart, create_yearly_returns_chart
 
 # Load Data Globally (to avoid reloading on every callback)
 print("Loading data...")
@@ -143,6 +143,19 @@ def update_dashboard(tab):
     total_realized_pl = sum(pnl['Realized P/L'] for pnl in realized_pnl_data)
     total_unrealized_pl = sum(item.get('Unrealized P/L', 0) for item in current_holdings_data)
 
+    # Annual Performance
+    yearly_data = calculate_yearly_returns(portfolio_value, daily_flows)
+    
+    # Extract Previous Year (2025) for Summary Cards
+    prev_year_metrics = next((y for y in yearly_data if y['Year'] == 2025), {'XIRR': 0, 'TWR': 0})
+    py_xirr = prev_year_metrics['XIRR'] * 100
+    py_twr = prev_year_metrics['TWR'] * 100
+
+    # Dates for tooltips
+    data_start = df['Run Date'].min().strftime('%b %d, %Y')
+    data_end = df['Run Date'].max().strftime('%b %d, %Y')
+    y1_start = (df['Run Date'].max() - pd.Timedelta(days=365)).strftime('%b %d, %Y')
+
     return html.Div([
         dbc.Row([
             dbc.Col(create_card("Current Value", f"${current_val:,.2f}", f"{pl_pct:+.2f}% All Time", "primary"), width=12, md=6, lg=3, className="mb-4"),
@@ -200,8 +213,14 @@ def update_dashboard(tab):
                     ], className="p-3")
                 ], className="glass-card h-100")
             ], width=12, md=6, lg=3, className="mb-4"),
-            dbc.Col(create_card("Personal Return (XIRR)", f"{cagr:.2f}%", f"{yoy_xirr:+.2f}% 1Y", "info"), width=12, md=6, lg=3, className="mb-4"),
-            dbc.Col(create_card("Portfolio Return (TWR)", f"{lifetime_twr:.2f}%", f"{yoy_twr:+.2f}% 1Y", "success"), width=12, md=6, lg=3, className="mb-4"),
+            dbc.Col(
+                create_card("Personal Return (XIRR)", f"{cagr:.2f}%", f"{yoy_xirr:+.2f}% 1Y", "info", annotation="till date"),
+                width=12, md=6, lg=3, className="mb-4"
+            ),
+            dbc.Col(
+                create_card("Portfolio Return (TWR)", f"{lifetime_twr:.2f}%", f"{yoy_twr:+.2f}% 1Y", "success", annotation="till date"),
+                width=12, md=6, lg=3, className="mb-4"
+            ),
         ]),
         
         dbc.Row([
@@ -209,7 +228,12 @@ def update_dashboard(tab):
                 html.Div([
                     create_portfolio_graph(portfolio_value, net_invested)
                 ], className="glass-card p-4")
-            ], width=12, className="mb-5")
+            ], width=12, lg=8, className="mb-5"),
+            dbc.Col([
+                html.Div([
+                    create_yearly_returns_chart(yearly_data)
+                ], className="glass-card p-4 h-100")
+            ], width=12, lg=4, className="mb-5")
         ]),
         
         # Allocation Tab (Stock vs Industry) - MOVED TO STATIC LAYOUT

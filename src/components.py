@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import yfinance as yf
 import pandas as pd
 
-def create_card(title, value, subtitle=None, color="primary"):
+def create_card(title, value, subtitle=None, color="primary", annotation=None):
     # Map custom colors to Bootstrap colors if needed, or use style argument
     # Bootstrap colors: primary, secondary, success, danger, warning, info, light, dark
     
@@ -16,7 +16,10 @@ def create_card(title, value, subtitle=None, color="primary"):
     return dbc.Card(
         dbc.CardBody([
             html.H6(title, className="card-subtitle mb-2 text-muted text-uppercase small font-weight-bold"),
-            html.H2(value, className="card-title text-white mb-1"),
+            html.Div([
+                html.H2(value, className="card-title text-white mb-1", style={'display': 'inline-block'}),
+                html.Span(f" {annotation}", className="text-muted small", style={'marginLeft': '8px', 'fontSize': '14px'}) if annotation else None
+            ]),
             html.P(subtitle, className=f"card-text {subtitle_color} small mb-0") if subtitle else None
         ], className="p-3"),
         className="glass-card h-100",
@@ -387,4 +390,69 @@ def create_history_table(history_data):
             )
         ], style={'maxHeight': '500px', 'overflowY': 'auto', 'borderRadius': '12px'})
     ])
+
+def create_yearly_returns_chart(yearly_data):
+    if not yearly_data:
+        return html.Div("No annual data available", className="text-muted")
+        
+    df = pd.DataFrame(yearly_data)
+    
+    # Year labels as strings for the x-axis
+    df['Year'] = df['Year'].astype(str)
+    
+    # Format percentages for display
+    df['XIRR_display'] = (df['XIRR'] * 100).round(2)
+    df['TWR_display'] = (df['TWR'] * 100).round(2)
+    
+    fig = go.Figure()
+    
+    # XIRR Bar (Matches "Info" Blue Card)
+    fig.add_trace(go.Bar(
+        x=df['Year'],
+        y=df['XIRR_display'],
+        name='Personal Return (XIRR)',
+        marker_color='rgba(0, 122, 255, 0.8)', # Apple Blue
+        hovertemplate='<b>%{x}</b><br>XIRR: %{y}%<extra></extra>'
+    ))
+    
+    # TWR Bar (Matches "Success" Green Card)
+    fig.add_trace(go.Bar(
+        x=df['Year'],
+        y=df['TWR_display'],
+        name='Portfolio Return (TWR)',
+        marker_color='rgba(52, 199, 89, 0.8)', # Apple Green
+        hovertemplate='<b>%{x}</b><br>TWR: %{y}%<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        template='plotly_dark',
+        title=dict(
+            text='Annual Performance Breakdown', 
+            font=dict(size=18, color='white'),
+            x=0.5,
+            xanchor='center',
+            y=0.95
+        ),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        barmode='group',
+        legend=dict(
+            orientation="h", 
+            yanchor="top", 
+            y=-0.15, 
+            xanchor="center", 
+            x=0.5, 
+            font=dict(color='rgba(255,255,255,0.7)', size=11)
+        ),
+        margin=dict(l=20, r=20, t=60, b=60),
+        xaxis=dict(showgrid=False, color='white'),
+        yaxis=dict(
+            title='Return (%)',
+            showgrid=True,
+            gridcolor='rgba(255,255,255,0.05)',
+            color='rgba(255,255,255,0.6)'
+        )
+    )
+    
+    return dcc.Graph(figure=fig, className="graph-container")
 
