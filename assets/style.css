@@ -42,42 +42,76 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
-/* Table Refinement (Bootstrap Table) */
+/* Glass Table (Bootstrap dbc.Table) */
 .glass-table {
+    background: var(--glass-bg) !important;
+    backdrop-filter: var(--glass-blur) !important;
+    -webkit-backdrop-filter: var(--glass-blur) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 16px !important;
+    overflow: hidden !important;
     border-collapse: separate !important;
-    border-spacing: 0 10px !important;
-    background: transparent !important;
+    border-spacing: 0 !important;
 }
 
 .glass-table thead th {
-    background: transparent !important;
-    color: rgba(255, 255, 255, 0.45) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    color: rgba(255, 255, 255, 0.5) !important;
     font-weight: 600 !important;
     font-size: 11px !important;
     text-transform: uppercase !important;
     letter-spacing: 0.1em !important;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
-    padding-bottom: 15px !important;
+    padding: 15px !important;
+    border-bottom: 1px solid var(--glass-border) !important;
+    border-top: none !important;
+    cursor: pointer !important;
+    /* Visual cue for sorting */
 }
 
-.glass-table tbody tr {
+.glass-table thead th:hover {
+    color: #fff !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+}
+
+.glass-table tbody td {
     background: transparent !important;
-    transition: transform 0.2s ease, background 0.2s ease !important;
-    border-radius: 12px !important;
+    color: rgba(255, 255, 255, 0.85);
+    /* Removed !important to allow inline P/L colors */
+    padding: 12px 15px !important;
+    font-size: 14px !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+    vertical-align: middle !important;
+}
+
+
+.glass-table tbody tr:last-child td {
+    border-bottom: none !important;
 }
 
 .glass-table tbody tr:hover {
-    background: rgba(255, 255, 255, 0.03) !important;
-    transform: scale(1.005);
+    background-color: rgba(255, 255, 255, 0.03) !important;
+    transition: background-color 0.2s ease;
 }
 
-.glass-table td {
-    color: rgba(255, 255, 255, 0.85) !important;
-    padding: 16px !important;
-    font-size: 14px !important;
-    border: none !important;
-    vertical-align: middle !important;
+/* Custom Scrollbar for scrollable table containers */
+.overflow-auto::-webkit-scrollbar,
+div[style*="overflowY: auto"]::-webkit-scrollbar {
+    width: 6px;
 }
+
+div[style*="overflowY: auto"]::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+div[style*="overflowY: auto"]::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+}
+
+div[style*="overflowY: auto"]::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
 
 /* Scrollbar Styling */
 ::-webkit-scrollbar {
