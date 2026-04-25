@@ -1,13 +1,51 @@
+import threading
+from datetime import datetime, timedelta
+
 import dash
 from dash import html, dcc
 import dash_bootstrap_components as dbc
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 import pandas as pd
 from data_loader import load_and_clean_data, categorize_transactions, get_portfolio_history, fetch_price_data, calculate_portfolio_value, fetch_sector_data
 from metrics import calculate_xirr, calculate_cagr, calculate_net_invested, calculate_cost_basis, calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics, calculate_yearly_returns
 from components import create_card, create_portfolio_graph, create_stock_performance_chart, create_holdings_table, create_history_table, create_industry_allocation_chart, create_yearly_returns_chart
+from fidelity_scraper import get_latest_transaction_date, run_scraper
 
-# Load Data Globally (to avoid reloading on every callback)
+# ── background fetch state ────────────────────────────────────────────────────
+_fetch_state = {"status": "idle", "message": ""}  # statuses: idle | fetching | done | error
+
+
+def _run_scraper_background() -> None:
+    global global_df, global_prices, global_sectors, all_symbols
+    _fetch_state["status"] = "fetching"
+    _fetch_state["message"] = "Fetching latest data from Fidelity..."
+    try:
+        run_scraper()
+        # Reload globals so the next page interaction picks up new data
+        global_df = categorize_transactions(load_and_clean_data())
+        all_symbols = [s for s in global_df['Symbol'].dropna().unique()
+                       if isinstance(s, str) and s.strip() != '']
+        start_date = global_df['Run Date'].min().strftime('%Y-%m-%d')
+        global_prices = fetch_price_data(all_symbols, start_date, tx_df=global_df)
+        global_sectors = fetch_sector_data(all_symbols)
+        _fetch_state["status"] = "done"
+        _fetch_state["message"] = "Data updated. Refresh the page to see the latest figures."
+    except Exception as exc:
+        _fetch_state["status"] = "error"
+        _fetch_state["message"] = f"Fetch failed: {exc}"
+
+
+def _maybe_start_background_fetch() -> None:
+    """Start the scraper in the background if data is more than 1 day old."""
+    latest = get_latest_transaction_date()
+    if latest.date() < (datetime.now() - timedelta(days=1)).date():
+        print(f"Data is stale (latest: {latest.date()}). Starting background fetch...")
+        threading.Thread(target=_run_scraper_background, daemon=True).start()
+    else:
+        print(f"Data is up to date (latest: {latest.date()}). Skipping fetch.")
+
+
+# ── Load Data Globally (to avoid reloading on every callback) ─────────────────
 print("Loading data...")
 global_df = load_and_clean_data()
 global_df = categorize_transactions(global_df)
@@ -19,7 +57,9 @@ start_date = global_df['Run Date'].min().strftime('%Y-%m-%d')
 global_prices = fetch_price_data(all_symbols, start_date, tx_df=global_df)
 global_sectors = fetch_sector_data(all_symbols)
 
-app = dash.Dash(__name__, 
+_maybe_start_background_fetch()
+
+app = dash.Dash(__name__,
                 external_stylesheets=[dbc.themes.DARKLY],
                 assets_folder='../assets',
                 suppress_callback_exceptions=True)
@@ -27,6 +67,15 @@ server = app.server
 app.title = "Financial Dashboard"
 
 app.layout = html.Div([
+    dcc.Interval(id='fetch-status-interval', interval=3000, n_intervals=0),
+    dbc.Toast(
+        id='fetch-status-toast',
+        header="Data Sync",
+        is_open=False,
+        dismissable=True,
+        duration=0,
+        style={"position": "fixed", "top": 20, "right": 20, "width": 360, "zIndex": 9999},
+    ),
     dbc.Container([
         # Centered Apple-style Header
         html.Div([
@@ -68,6 +117,27 @@ app.layout = html.Div([
         ])
     ], fluid=False, className="pb-5")
 ], style={'overflowX': 'hidden'})
+
+@app.callback(
+    Output('fetch-status-toast', 'children'),
+    Output('fetch-status-toast', 'is_open'),
+    Output('fetch-status-toast', 'icon'),
+    Output('fetch-status-interval', 'disabled'),
+    Input('fetch-status-interval', 'n_intervals'),
+)
+def update_fetch_status(n):
+    status = _fetch_state["status"]
+    message = _fetch_state["message"]
+    if status == "idle":
+        return "", False, "primary", True
+    if status == "fetching":
+        return message, True, "warning", False
+    if status == "done":
+        return message, True, "success", True
+    if status == "error":
+        return message, True, "danger", True
+    return "", False, "primary", True
+
 
 @app.callback(
     Output('dashboard-content', 'children'),

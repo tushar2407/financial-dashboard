@@ -20,8 +20,10 @@ def get_latest_transaction_date():
     dates = []
     for f in files:
         try:
-            # We only need the first few rows to check 'Run Date'
-            df = pd.read_csv(f, skiprows=2, usecols=['Run Date'])
+            # Original Fidelity exports have 2 metadata rows before the header;
+            # cleaned files written by this scraper have the header on row 0.
+            # Try both so either format works.
+            df = pd.read_csv(f, usecols=['Run Date'])
             df['Run Date'] = pd.to_datetime(df['Run Date'], format='%m/%d/%Y', errors='coerce')
             max_date = df['Run Date'].max()
             if pd.notnull(max_date):
@@ -62,128 +64,116 @@ def clean_fidelity_csv(input_path, output_path):
     with open(output_path, 'w', encoding='utf-8') as f:
         f.writelines(cleaned_lines)
 
+MAX_CHUNK_DAYS = 90
+
+
+def _build_date_chunks(start_date: datetime, end_date: datetime) -> list[tuple[datetime, datetime]]:
+    """Splits a date range into chunks of at most MAX_CHUNK_DAYS days."""
+    chunks = []
+    chunk_start = start_date
+    while chunk_start <= end_date:
+        chunk_end = min(chunk_start + timedelta(days=MAX_CHUNK_DAYS - 1), end_date)
+        chunks.append((chunk_start, chunk_end))
+        chunk_start = chunk_end + timedelta(days=1)
+    return chunks
+
+
+def _download_chunk(page, chunk_start: datetime, chunk_end: datetime, first_chunk: bool) -> None:
+    """Downloads a single date-range chunk from the already-open Fidelity activity page."""
+    start_str = chunk_start.strftime('%m/%d/%Y')
+    end_str = chunk_end.strftime('%m/%d/%Y')
+    print(f"Fetching chunk: {start_str} to {end_str}")
+
+    if not first_chunk:
+        # Navigate back to reset the page UI state between chunks
+        print("Navigating back to activity page for next chunk...")
+        page.goto("https://digital.fidelity.com/ftgw/digital/portfolio/activity")
+        time.sleep(2)
+
+    print("Waiting for time period dropdown...")
+    dropdown = page.locator("button").filter(has_text=re.compile(r"Past", re.I)).first
+    dropdown.wait_for(state="visible", timeout=60000)
+    dropdown.click()
+
+    print("Switching to Custom tab...")
+    custom_tab = page.locator("label[for='Custom']").first
+    if not custom_tab.is_visible():
+        custom_tab = page.locator("apex-kit-segment[pvd-id='Custom']").first
+    custom_tab.wait_for(state="visible")
+    custom_tab.click()
+
+    def fill_date_field(input_id: str, date_value_native: str) -> None:
+        field = page.locator(f"#{input_id}")
+        field.wait_for(state="visible", timeout=15000)
+        field.fill(date_value_native)
+        field.evaluate("(el) => el.dispatchEvent(new Event('change', { bubbles: true }))")
+
+    fill_date_field("customized-timeperiod-from-date", chunk_start.strftime('%Y-%m-%d'))
+    fill_date_field("customized-timeperiod-to-date", chunk_end.strftime('%Y-%m-%d'))
+
+    print("Applying filters...")
+    apply_btn = page.locator("button:has-text('Apply')").first
+    apply_btn.wait_for(state="visible")
+    apply_btn.click()
+    time.sleep(3)
+
+    print("Opening Download menu...")
+    download_btn = page.locator("button[aria-label='Download']").first
+    if not download_btn.is_visible():
+        download_btn = page.locator(".activity-list--header-icon-download").first
+    if not download_btn.is_visible():
+        download_btn = page.locator("button:has(.icon-download)").first
+    download_btn.wait_for(state="visible")
+    download_btn.click()
+
+    print("Starting CSV download...")
+    with page.expect_download() as download_info:
+        page.locator("button, a").filter(has_text="Download as CSV").first.click()
+
+    download = download_info.value
+    raw_filename = f"Accounts_History_{chunk_start.strftime('%Y%m%d')}_{chunk_end.strftime('%Y%m%d')}_raw.csv"
+    temp_path = os.path.join(DATA_DIR, raw_filename)
+    download.save_as(temp_path)
+    print(f"Downloaded raw CSV to {temp_path}")
+
+    final_filename = f"Accounts_History ({chunk_start.strftime('%m%d%Y')} - {chunk_end.strftime('%m%d%Y')}).csv"
+    final_path = os.path.join(DATA_DIR, final_filename)
+    clean_fidelity_csv(temp_path, final_path)
+    os.remove(temp_path)
+    print(f"Cleaned and saved to {final_path}")
+
+
 def run_scraper(start_date=None, end_date=None):
     if not start_date:
         latest = get_latest_transaction_date()
         start_date = latest + timedelta(days=1)
-    
+
     if not end_date:
         end_date = datetime.now()
-        
-    start_str = start_date.strftime('%m/%d/%Y')
-    end_str = end_date.strftime('%m/%d/%Y')
-    
-    print(f"Fetching data from {start_str} to {end_str}")
+
+    chunks = _build_date_chunks(start_date, end_date)
+    print(f"Fetching data from {start_date.strftime('%m/%d/%Y')} to {end_date.strftime('%m/%d/%Y')} "
+          f"({len(chunks)} chunk(s) of up to {MAX_CHUNK_DAYS} days each)")
 
     with sync_playwright() as p:
-        # Using persistent context to save login state
         context = p.chromium.launch_persistent_context(
             USER_DATA_DIR,
             headless=False,
             slow_mo=500
         )
         page = context.new_page()
-        
-        # 1. Navigate to Activity & Orders
+
         page.goto("https://digital.fidelity.com/ftgw/digital/portfolio/activity")
-        
-        # Check if we need to login
+
         if "login" in page.url.lower() or page.locator("input#userId").is_visible():
             print("Please log in and complete MFA in the browser window...")
             page.wait_for_url("**/portfolio/activity**", timeout=0)
-        
-        print("Logged in. Navigating to Activity filters...")
-        
-        # 2. Click time period dropdown
-        print("Waiting for time period dropdown...")
-        # The button usually has "Past" (e.g., "Past 30 days")
-        dropdown = page.locator("button").filter(has_text=re.compile(r"Past", re.I)).first
-        dropdown.wait_for(state="visible", timeout=30000)
-        dropdown.click()
-        
-        # 3. Click Custom tab
-        print("Switching to Custom tab...")
-        # Based on DOM: <label class="pvd-segment__label" for="Custom">
-        custom_tab = page.locator("label[for='Custom']").first
-        if not custom_tab.is_visible():
-            # Fallback to the ID on the apex-kit-segment
-            custom_tab = page.locator("apex-kit-segment[pvd-id='Custom']").first
-            
-        custom_tab.wait_for(state="visible")
-        custom_tab.click()
-        
-        # 4. Fill dates
-        print(f"Entering date range: {start_str} to {end_str}")
-        
-        # Format for native input[type=date] is YYYY-MM-DD
-        start_native = start_date.strftime('%Y-%m-%d')
-        end_native = end_date.strftime('%Y-%m-%d')
-        
-        def fill_date_field(input_id, date_value_native):
-            print(f"Locating field: #{input_id}")
-            field = page.locator(f"#{input_id}")
-            field.wait_for(state="visible", timeout=15000)
-            print(f"Found {input_id}. Entering value {date_value_native}...")
-            
-            # For type="date", .fill("YYYY-MM-DD") is the most reliable way in Playwright
-            field.fill(date_value_native)
-            # Sometimes click/blur helps register the change
-            field.evaluate("(el) => el.dispatchEvent(new Event('change', { bubbles: true }))")
 
-        try:
-            # Using the IDs provided by the user
-            fill_date_field("customized-timeperiod-from-date", start_native)
-            fill_date_field("customized-timeperiod-to-date", end_native)
-        except Exception as e:
-            print(f"Error filling date fields: {e}")
-            raise e
-        
-        # 5. Click Apply
-        print("Applying filters...")
-        apply_btn = page.locator("button:has-text('Apply')").first
-        apply_btn.wait_for(state="visible")
-        apply_btn.click()
-        
-        # Wait for the results to refresh
-        time.sleep(3) 
-        
-        # 6. Click Download icon
-        print("Opening Download menu...")
-        # The icon is often an SVG inside a button
-        download_btn = page.locator("button[aria-label='Download']").first
-        if not download_btn.is_visible():
-            # Try finding the icon class seen in some Fidelity versions
-            download_btn = page.locator(".activity-list--header-icon-download").first
-            
-        if not download_btn.is_visible():
-            # Last resort: find by proximity to print icon
-            download_btn = page.locator("button:has(.icon-download)").first
+        print("Logged in. Starting chunk downloads...")
 
-        download_btn.wait_for(state="visible")
-        download_btn.click()
-        
-        # 7. Click Download as CSV
-        print("Starting CSV download...")
-        with page.expect_download() as download_info:
-            page.locator("button, a").filter(has_text="Download as CSV").first.click()
-        
-        download = download_info.value
-        filename = f"Accounts_History_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}_raw.csv"
-        temp_path = os.path.join(DATA_DIR, filename)
-        download.save_as(temp_path)
-        
-        print(f"Downloaded raw CSV to {temp_path}")
-        
-        # 8. Clean CSV
-        final_filename = f"Accounts_History ({start_date.strftime('%m%d%Y')} - {end_date.strftime('%m%d%Y')}).csv"
-        final_path = os.path.join(DATA_DIR, final_filename)
-        clean_fidelity_csv(temp_path, final_path)
-        
-        # Remove raw file
-        os.remove(temp_path)
-        
-        print(f"Cleaned and saved to {final_path}")
-        
+        for i, (chunk_start, chunk_end) in enumerate(chunks):
+            _download_chunk(page, chunk_start, chunk_end, first_chunk=(i == 0))
+
         context.close()
 
 if __name__ == "__main__":
