@@ -129,8 +129,10 @@ def categorize_transactions(df):
                 return "WITHDRAWAL"
         elif "JOURNALED SPP PURCHASE CREDIT" in description or "JOURNALED SPP PURCHASE CREDIT" in action:
             return "DEPOSIT"
-        elif "YOU BOUGHT" in action or "CONTRIBUTIONS" in action:
-            return "BUY"  # 401k contributions are purchases
+        elif "CONTRIBUTIONS" in action:
+            return "CONTRIBUTION"  # New money (e.g. payroll) buying fund shares in a 401k
+        elif "YOU BOUGHT" in action:
+            return "BUY"
         elif "YOU SOLD" in action:
             return "SELL"
         elif "DISTRIBUTION" in action:
@@ -147,7 +149,53 @@ def categorize_transactions(df):
             return "OTHER"
 
     categorized = df.assign(Category=df.apply(get_category, axis=1))
-    return _mark_round_trip_transfers(categorized)
+    return _add_plan_transfer_outs(_mark_round_trip_transfers(categorized))
+
+
+# Fidelity 401k -> BrokerageLink flow: contributions first buy a placeholder
+# "BROKERAGELINK" position (at $1/unit) inside the plan account, then a few days
+# later the cash lands in the BrokerageLink account as a transfer. The export
+# never reduces the placeholder, so without a correction the same dollars are
+# counted in both accounts.
+BROKERAGELINK_PLACEHOLDER = 'BROKERAGELINK'
+BROKERAGELINK_ARRIVAL_ACTION = 'BROKERAGE OPTION'
+
+
+def _add_plan_transfer_outs(df):
+    """Adds a derived PLAN_TRANSFER_OUT row to the plan account for every
+    BrokerageLink arrival, draining the placeholder by the same amount.
+
+    The derived row moves no cash, reduces placeholder units, and is a capital
+    outflow for the plan, so it nets to zero against the BrokerageLink
+    INTERNAL_TRANSFER in combined views.
+    """
+    placeholder_rows = df[(df['Category'] == 'CONTRIBUTION') &
+                          (df['Symbol'] == BROKERAGELINK_PLACEHOLDER)]
+    plan_accounts = placeholder_rows['Account'].unique()
+    if len(plan_accounts) != 1:
+        return df
+
+    arrivals = df[(df['Category'] == 'INTERNAL_TRANSFER') &
+                  (df['Amount'] > 0) &
+                  df['Action'].astype(str).str.upper().str.contains(BROKERAGELINK_ARRIVAL_ACTION)]
+    if arrivals.empty:
+        return df
+
+    template = placeholder_rows.iloc[0]
+    derived = pd.DataFrame([
+        {
+            **template.to_dict(),
+            'Run Date': row['Run Date'],
+            'Action': "Moved to BrokerageLink (derived)",
+            'Description': "Derived from BrokerageLink transfer",
+            'Category': 'PLAN_TRANSFER_OUT',
+            'Quantity': -row['Amount'],
+            'Price': 1.0,
+            'Amount': -row['Amount'],
+        }
+        for _, row in arrivals.iterrows()
+    ])
+    return pd.concat([df, derived], ignore_index=True)
 
 
 # A withdrawal returned to the same account in full within this many days is
@@ -189,7 +237,9 @@ def _mark_round_trip_transfers(df):
 
 
 # ── Retirement account keywords ───────────────────────────────────────────────
-_RETIREMENT_KEYWORDS = ['401K', '401(K)', 'IRA', 'ROTH', 'RETIREMENT', 'PENSION']
+# BROKERAGELINK is Fidelity's self-directed window inside a 401k; the money is
+# locked up like the rest of the plan.
+_RETIREMENT_KEYWORDS = ['401K', '401(K)', 'IRA', 'ROTH', 'RETIREMENT', 'PENSION', 'BROKERAGELINK']
 
 
 def _classify_account_type(account_name: str) -> str:
@@ -253,17 +303,16 @@ def tag_account_types(df, account_meta: dict) -> pd.DataFrame:
 # both must be counted or the dividend is double-counted as cash and shares.
 CASH_CATEGORIES = {'DEPOSIT', 'WITHDRAWAL', 'SELL', 'BUY', 'DIVIDEND', 'REINVESTMENT',
                    'TAX', 'FEE', 'INTERNAL_TRANSFER'}
-SHARE_CHANGING_CATEGORIES = {'BUY', 'SELL', 'REINVESTMENT', 'DISTRIBUTION'}
+# CONTRIBUTION is absent from CASH_CATEGORIES: the money goes straight into
+# fund shares and never sits in the account as cash.
+SHARE_CHANGING_CATEGORIES = {'BUY', 'CONTRIBUTION', 'SELL', 'REINVESTMENT', 'DISTRIBUTION',
+                             'PLAN_TRANSFER_OUT'}
 
 
 def _cash_delta(row) -> float:
     """Change in uninvested cash caused by one categorized transaction."""
     category = row['Category']
     if category not in CASH_CATEGORIES:
-        return 0.0
-    # Retirement (401k etc.) BUYs are the contribution itself; the money never
-    # sat in the account as cash.
-    if category == 'BUY' and row.get('Account Type', '') == 'retirement':
         return 0.0
     return row['Amount']
 
