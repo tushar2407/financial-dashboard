@@ -347,25 +347,29 @@ def calculate_yearly_returns(portfolio_series, daily_cash_flows):
         
     return yearly_metrics
 
-def _consume_lots_fifo(symbol_lots: list, qty: float) -> tuple[float, float]:
+def _consume_lots_fifo(symbol_lots: list, qty: float, as_of=None) -> tuple[float, float, float]:
     """Removes `qty` shares from the oldest lots first (mutates `symbol_lots`).
 
-    Returns (cost basis of the removed shares, shares actually removed).
+    Returns (cost basis of the removed shares, shares actually removed,
+    share-days held as of `as_of`, i.e. sum of shares x days since purchase).
     """
     remaining = qty
     cost_basis = 0.0
     removed = 0.0
+    share_days = 0.0
     while remaining > 0 and symbol_lots:
         lot = symbol_lots[0]
         take = min(lot['qty'], remaining)
         cost_basis += take * lot['cost']
         removed += take
+        if as_of is not None:
+            share_days += take * (as_of - lot['date']).days
         remaining -= take
         if lot['qty'] > take:
             lot['qty'] -= take
         else:
             symbol_lots.pop(0)
-    return cost_basis, removed
+    return cost_basis, removed, share_days
 
 
 def calculate_cost_basis(df):
@@ -425,7 +429,7 @@ def calculate_cost_basis(df):
             # Sell Price = 1525.96 / 19 = 80.31.
             sell_price = abs(amount / qty)
             
-            cost_basis, shares_sold_so_far = _consume_lots_fifo(lots[symbol], qty_to_sell)
+            cost_basis, shares_sold_so_far, share_days = _consume_lots_fifo(lots[symbol], qty_to_sell, as_of=date)
 
             # Record Realized P/L
             # Proceeds = shares_sold_so_far * sell_price
@@ -440,7 +444,8 @@ def calculate_cost_basis(df):
                 'Sell Price': sell_price,
                 'Cost Basis': cost_basis,
                 'Proceeds': proceeds,
-                'Realized P/L': pnl
+                'Realized P/L': pnl,
+                'Holding Days': round(share_days / shares_sold_so_far) if shares_sold_so_far else 0,
             })
 
         elif action == 'PLAN_TRANSFER_OUT':
