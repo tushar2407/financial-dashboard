@@ -64,6 +64,60 @@ def clean_fidelity_csv(input_path, output_path):
         f.writelines(cleaned_lines)
 
 MAX_CHUNK_DAYS = 90
+LAST_FETCH_MARKER = '.last_fetch'
+
+
+def _last_fetch_time(data_dir: str = DATA_DIR) -> datetime | None:
+    """When data was last fetched: the marker written by a successful fetch,
+    else the newest export file (covers data fetched before the marker existed)."""
+    marker = os.path.join(data_dir, LAST_FETCH_MARKER)
+    candidates = [marker] if os.path.exists(marker) else \
+        glob.glob(os.path.join(data_dir, 'Accounts_History*.csv'))
+    if not candidates:
+        return None
+    return datetime.fromtimestamp(max(os.path.getmtime(p) for p in candidates))
+
+
+def is_data_stale(now: datetime | None = None, data_dir: str = DATA_DIR) -> bool:
+    """Data is stale when it has not been fetched yet today."""
+    now = now or datetime.now()
+    last = _last_fetch_time(data_dir)
+    return last is None or last.date() < now.date()
+
+
+def mark_fetched(now: datetime | None = None, data_dir: str = DATA_DIR) -> None:
+    now = now or datetime.now()
+    os.makedirs(data_dir, exist_ok=True)
+    marker = os.path.join(data_dir, LAST_FETCH_MARKER)
+    with open(marker, 'w') as f:
+        f.write(now.isoformat())
+    os.utime(marker, (now.timestamp(), now.timestamp()))
+
+
+def refresh_if_stale(fetch=None, now: datetime | None = None, data_dir: str = DATA_DIR) -> bool:
+    """Runs `fetch` (default: run_scraper) if data is stale.
+
+    Never raises: a failed or interrupted fetch leaves the existing data in
+    place. Returns True only if a fetch ran and completed.
+    """
+    last = _last_fetch_time(data_dir)
+    if not is_data_stale(now, data_dir):
+        print(f"Data is fresh (last fetched {last:%b %d %H:%M}); skipping Fidelity fetch.")
+        return False
+
+    print("\n" + "=" * 65)
+    print("Data is stale" + (f" (last fetched {last:%b %d})" if last else "") +
+          ". Fetching from Fidelity before starting the dashboard.")
+    print("Log in in the Chrome window. Press Ctrl+C to skip and use existing data.")
+    print("=" * 65 + "\n")
+    try:
+        (fetch or run_scraper)()
+        return True
+    except KeyboardInterrupt:
+        print("\nFetch skipped; starting with existing data.")
+    except Exception as e:
+        print(f"\nFetch failed ({e}); starting with existing data.")
+    return False
 ACTIVITY_URL = "https://digital.fidelity.com/ftgw/digital/portfolio/activity"
 LOGIN_POLL_MS = 2000
 
@@ -235,6 +289,7 @@ def run_scraper(start_date=None, end_date=None, reset_session=False):
     chunks = _build_date_chunks(start_date, end_date)
     if not chunks:
         print("Data is already up to date; nothing to fetch.")
+        mark_fetched()
         return
     print(f"Fetching data from {start_date:%m/%d/%Y} to {end_date:%m/%d/%Y} "
           f"({len(chunks)} chunk(s) of up to {MAX_CHUNK_DAYS} days each)")
@@ -260,6 +315,7 @@ def run_scraper(start_date=None, end_date=None, reset_session=False):
             print("\nLogged in. Starting data download...")
             for i, (chunk_start, chunk_end) in enumerate(chunks):
                 _download_chunk(page, chunk_start, chunk_end, first_chunk=(i == 0))
+            mark_fetched()
         except Exception:
             _save_debug_screenshot(page)
             raise

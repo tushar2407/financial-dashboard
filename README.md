@@ -63,6 +63,9 @@ python fetch_data.py
 # Start the Dash server
 python src/app.py
 ```
+If data has not been fetched yet today, the server runs the Fidelity fetch first
+(log in and complete MFA in the Chrome window) and then starts with fresh data.
+Press Ctrl+C during the fetch to skip it, or start with `python src/app.py --no-fetch`.
 Visit `http://127.0.0.1:8050` in your browser.
 
 ---

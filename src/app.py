@@ -1,7 +1,6 @@
 import json
 import os
-import threading
-from datetime import datetime, timedelta
+import sys
 
 import dash
 from dash import html, dcc, ctx, ALL
@@ -13,7 +12,7 @@ from data_loader import (get_current_cash, load_and_clean_data, categorize_trans
                          discover_accounts, tag_account_types)
 from metrics import calculate_dividend_income, calculate_xirr, calculate_cagr, calculate_net_invested, calculate_cost_basis, calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics, calculate_yearly_returns
 from components import create_card, create_portfolio_graph, create_history_table, create_yearly_returns_chart, create_category_accordion_item
-from fidelity_scraper import get_latest_transaction_date, run_scraper
+from fidelity_scraper import refresh_if_stale
 
 # ── category storage ──────────────────────────────────────────────────────────
 CATEGORIES_PATH = os.path.join('data', 'stock_categories.json')
@@ -50,39 +49,13 @@ def _enrich_holdings(holdings_data: list, prices) -> list:
                 item['P/L %'] = 0
     return holdings_data
 
-# ── background fetch state ────────────────────────────────────────────────────
-_fetch_state = {"status": "idle", "message": ""}  # statuses: idle | fetching | done | error
-
-
-def _run_scraper_background() -> None:
-    global global_df, global_prices, global_sectors, all_symbols
-    _fetch_state["status"] = "fetching"
-    _fetch_state["message"] = "Fetching latest data from Fidelity..."
-    try:
-        run_scraper()
-        # Reload globals so the next page interaction picks up new data
-        global_df = categorize_transactions(load_and_clean_data())
-        all_symbols = [s for s in global_df['Symbol'].dropna().unique()
-                       if isinstance(s, str) and s.strip() != '']
-        start_date = global_df['Run Date'].min().strftime('%Y-%m-%d')
-        global_prices = fetch_price_data(all_symbols, start_date, tx_df=global_df)
-        global_sectors = fetch_sector_data(all_symbols)
-        _fetch_state["status"] = "done"
-        _fetch_state["message"] = "Data updated. Refresh the page to see the latest figures."
-    except Exception as exc:
-        _fetch_state["status"] = "error"
-        _fetch_state["message"] = f"Fetch failed: {exc}"
-
-
-def _maybe_start_background_fetch() -> None:
-    """Check if data is stale and warn (but don't auto-launch the scraper,
-    since it opens Chrome and requires MFA)."""
-    latest = get_latest_transaction_date()
-    if latest.date() < (datetime.now() - timedelta(days=1)).date():
-        print(f"\n⚠️  Data is stale (latest: {latest.date()}). "
-              f"Run 'python fetch_data.py' to update.\n")
-    else:
-        print(f"Data is up to date (latest: {latest.date()}). Skipping fetch.")
+# ── Refresh stale data on server start ────────────────────────────────────────
+# Only when launched as a server (not when imported, e.g. by tests), and only in
+# the first process: Dash's debug reloader re-runs this module in a child
+# process with WERKZEUG_RUN_MAIN=true, which then loads the freshly fetched data.
+_IS_SERVER_START = __name__ == '__main__' and os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
+if _IS_SERVER_START and '--no-fetch' not in sys.argv:
+    refresh_if_stale()
 
 
 # ── Load Data Globally (to avoid reloading on every callback) ─────────────────
@@ -102,8 +75,6 @@ all_symbols = [s for s in all_symbols if isinstance(s, str) and s.strip() != '']
 start_date = global_df['Run Date'].min().strftime('%Y-%m-%d')
 global_prices = fetch_price_data(all_symbols, start_date, tx_df=global_df)
 global_sectors = fetch_sector_data(all_symbols)
-
-_maybe_start_background_fetch()
 
 app = dash.Dash(__name__,
                 external_stylesheets=[dbc.themes.DARKLY],
@@ -160,15 +131,6 @@ def _filter_df(account_tab: str):
 
 
 app.layout = html.Div([
-    dcc.Interval(id='fetch-status-interval', interval=3000, n_intervals=0),
-    dbc.Toast(
-        id='fetch-status-toast',
-        header="Data Sync",
-        is_open=False,
-        dismissable=True,
-        duration=0,
-        style={"position": "fixed", "top": 20, "right": 20, "width": 360, "zIndex": 9999},
-    ),
     dcc.Store(id='categories-store', data=load_categories()),
     dbc.Container([
         # Centered Apple-style Header
@@ -208,27 +170,6 @@ app.layout = html.Div([
 
     ], fluid=False, className="pb-5")
 ], style={'overflowX': 'hidden'})
-
-@app.callback(
-    Output('fetch-status-toast', 'children'),
-    Output('fetch-status-toast', 'is_open'),
-    Output('fetch-status-toast', 'icon'),
-    Output('fetch-status-interval', 'disabled'),
-    Input('fetch-status-interval', 'n_intervals'),
-)
-def update_fetch_status(n):
-    status = _fetch_state["status"]
-    message = _fetch_state["message"]
-    if status == "idle":
-        return "", False, "primary", True
-    if status == "fetching":
-        return message, True, "warning", False
-    if status == "done":
-        return message, True, "success", True
-    if status == "error":
-        return message, True, "danger", True
-    return "", False, "primary", True
-
 
 @app.callback(
     Output('dashboard-content', 'children'),
