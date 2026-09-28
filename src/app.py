@@ -289,7 +289,24 @@ def update_dashboard(tab):
     # Dates for tooltips
     data_start = df['Run Date'].min().strftime('%b %d, %Y')
     data_end = df['Run Date'].max().strftime('%b %d, %Y')
-    y1_start = (df['Run Date'].max() - pd.Timedelta(days=365)).strftime('%b %d, %Y')
+    # 1Y metrics are measured back from the last valued day, not the last transaction
+    metrics_end = portfolio_value.index[-1] if not portfolio_value.empty else df['Run Date'].max()
+    y1_start = (metrics_end - pd.Timedelta(days=365)).strftime('%b %d, %Y')
+
+    xirr_info = [
+        html.P("Your personal return. It accounts for when and how much money "
+               "you put in or took out, so good or bad timing shows up here."),
+        html.P(f"Headline: annualized, {data_start} to today. "
+               f"1Y: annualized, trailing year from {y1_start}."),
+        html.P("Use it to answer: how did my money actually grow?", className="mb-0"),
+    ]
+    twr_info = [
+        html.P("How your investments performed, ignoring the size and timing of "
+               "deposits and withdrawals."),
+        html.P(f"Headline: total (not annualized) return, {data_start} to today. "
+               f"1Y: trailing year from {y1_start}."),
+        html.P("Use it to compare against an index like the S&P 500.", className="mb-0"),
+    ]
 
     return html.Div([
         dbc.Row([
@@ -375,11 +392,11 @@ def update_dashboard(tab):
                 ], className="glass-card h-100")
             ], width=12, md=6, lg=3, className="mb-4"),
             dbc.Col(
-                create_card("Personal Return (XIRR)", f"{cagr:.2f}%", f"{yoy_xirr:+.2f}% 1Y", "info", annotation="till date"),
+                create_card("Personal Return (XIRR)", f"{cagr:.2f}%", f"{yoy_xirr:+.2f}% 1Y", "info", annotation="till date", info=xirr_info),
                 width=12, md=6, lg=3, className="mb-4"
             ),
             dbc.Col(
-                create_card("Portfolio Return (TWR)", f"{lifetime_twr:.2f}%", f"{yoy_twr:+.2f}% 1Y", "success", annotation="till date"),
+                create_card("Portfolio Return (TWR)", f"{lifetime_twr:.2f}%", f"{yoy_twr:+.2f}% 1Y", "success", annotation="till date", info=twr_info),
                 width=12, md=6, lg=3, className="mb-4"
             ),
         ]),

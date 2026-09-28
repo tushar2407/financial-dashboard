@@ -1,10 +1,20 @@
+import re
+
 from dash import dcc, html, dash_table
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import yfinance as yf
 import pandas as pd
 
-def create_card(title, value, subtitle=None, color="primary", annotation=None):
+def create_info_icon(target_id, info):
+    """Small circled 'i' that shows `info` (text or components) on hover."""
+    return html.Span([
+        html.Span("i", id=target_id, className="info-icon", tabIndex=0),
+        dbc.Tooltip(info, target=target_id, placement="bottom", className="info-tooltip"),
+    ])
+
+
+def create_card(title, value, subtitle=None, color="primary", annotation=None, info=None):
     # Map custom colors to Bootstrap colors if needed, or use style argument
     # Bootstrap colors: primary, secondary, success, danger, warning, info, light, dark
     
@@ -13,9 +23,13 @@ def create_card(title, value, subtitle=None, color="primary", annotation=None):
     if subtitle and ("+" in subtitle or "All Time" in subtitle):
         subtitle_color = "text-success" if "+" in subtitle or float(subtitle.split('%')[0].replace(',','')) >= 0 else "text-danger"
     
+    card_id = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-') + "-card"
     return dbc.Card(
         dbc.CardBody([
-            html.H6(title, className="card-subtitle mb-2 text-muted text-uppercase small font-weight-bold"),
+            html.H6([
+                title,
+                create_info_icon(f"{card_id}-info", info) if info else None,
+            ], className="card-subtitle mb-2 text-muted text-uppercase small font-weight-bold"),
             html.Div([
                 html.H2(value, className="card-title text-white mb-1", style={'display': 'inline-block'}),
                 html.Span(f" {annotation}", className="text-muted small", style={'marginLeft': '8px', 'fontSize': '14px'}) if annotation else None
@@ -23,7 +37,7 @@ def create_card(title, value, subtitle=None, color="primary", annotation=None):
             html.P(subtitle, className=f"card-text {subtitle_color} small mb-0") if subtitle else None
         ], className="p-3"),
         className="glass-card h-100",
-        id=title.lower().replace(" ", "-") + "-card"
+        id=card_id
     )
 
 def create_portfolio_graph(portfolio_value, net_invested):

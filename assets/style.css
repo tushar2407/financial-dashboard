@@ -332,3 +332,50 @@ h6 {
 .Select-clear:hover {
     color: #fff !important;
 }
+/* Info icon + tooltip on metric cards */
+.info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    margin-left: 6px;
+    border: 1px solid var(--apple-gray);
+    border-radius: 50%;
+    color: var(--apple-gray);
+    font-size: 10px;
+    font-weight: 600;
+    font-style: normal;
+    text-transform: none;
+    vertical-align: middle;
+    cursor: help;
+    transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.info-icon:hover,
+.info-icon:focus {
+    color: #fff;
+    border-color: #fff;
+    outline: none;
+}
+
+.info-tooltip {
+    font-family: inherit;
+}
+
+.info-tooltip .tooltip-inner {
+    max-width: 300px;
+    padding: 10px 12px;
+    text-align: left;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(30, 30, 32, 0.96);
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.info-tooltip .tooltip-inner p {
+    margin-bottom: 6px;
+}
