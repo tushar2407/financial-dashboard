@@ -1,6 +1,6 @@
 dash
 pandas
-yfinance
+yfinance>=1.6
 numpy
 plotly
 scipy
