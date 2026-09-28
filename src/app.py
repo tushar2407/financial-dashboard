@@ -1,15 +1,54 @@
+import json
+import os
 import threading
 from datetime import datetime, timedelta
 
 import dash
-from dash import html, dcc
+from dash import html, dcc, ctx, ALL
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 import pandas as pd
-from data_loader import load_and_clean_data, categorize_transactions, get_portfolio_history, fetch_price_data, calculate_portfolio_value, fetch_sector_data
-from metrics import calculate_xirr, calculate_cagr, calculate_net_invested, calculate_cost_basis, calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics, calculate_yearly_returns
-from components import create_card, create_portfolio_graph, create_stock_performance_chart, create_holdings_table, create_history_table, create_industry_allocation_chart, create_yearly_returns_chart
+from data_loader import (get_current_cash, load_and_clean_data, categorize_transactions, get_portfolio_history,
+                         fetch_price_data, calculate_portfolio_value, fetch_sector_data,
+                         discover_accounts, tag_account_types)
+from metrics import calculate_dividend_income, calculate_xirr, calculate_cagr, calculate_net_invested, calculate_cost_basis, calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics, calculate_yearly_returns
+from components import create_card, create_portfolio_graph, create_history_table, create_yearly_returns_chart, create_category_accordion_item
 from fidelity_scraper import get_latest_transaction_date, run_scraper
+
+# ── category storage ──────────────────────────────────────────────────────────
+CATEGORIES_PATH = os.path.join('data', 'stock_categories.json')
+
+
+def load_categories() -> dict:
+    if os.path.exists(CATEGORIES_PATH):
+        with open(CATEGORIES_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def save_categories(cats: dict) -> None:
+    with open(CATEGORIES_PATH, 'w') as f:
+        json.dump(cats, f, indent=2)
+
+
+def _enrich_holdings(holdings_data: list, prices) -> list:
+    """Add Current Price, Market Value, Unrealized P/L, P/L % to each holding in-place."""
+    if not prices.empty:
+        latest_prices = prices.iloc[-1]
+        for item in holdings_data:
+            sym = item['Symbol']
+            if sym in latest_prices:
+                curr_price = latest_prices[sym]
+                item['Current Price'] = curr_price
+                item['Market Value'] = item['Quantity'] * curr_price
+                item['Unrealized P/L'] = item['Market Value'] - item['Total Cost']
+                item['P/L %'] = (item['Unrealized P/L'] / item['Total Cost']) if item['Total Cost'] != 0 else 0
+            else:
+                item['Current Price'] = 0
+                item['Market Value'] = 0
+                item['Unrealized P/L'] = 0
+                item['P/L %'] = 0
+    return holdings_data
 
 # ── background fetch state ────────────────────────────────────────────────────
 _fetch_state = {"status": "idle", "message": ""}  # statuses: idle | fetching | done | error
@@ -36,11 +75,12 @@ def _run_scraper_background() -> None:
 
 
 def _maybe_start_background_fetch() -> None:
-    """Start the scraper in the background if data is more than 1 day old."""
+    """Check if data is stale and warn (but don't auto-launch the scraper,
+    since it opens Chrome and requires MFA)."""
     latest = get_latest_transaction_date()
     if latest.date() < (datetime.now() - timedelta(days=1)).date():
-        print(f"Data is stale (latest: {latest.date()}). Starting background fetch...")
-        threading.Thread(target=_run_scraper_background, daemon=True).start()
+        print(f"\n⚠️  Data is stale (latest: {latest.date()}). "
+              f"Run 'python fetch_data.py' to update.\n")
     else:
         print(f"Data is up to date (latest: {latest.date()}). Skipping fetch.")
 
@@ -49,6 +89,12 @@ def _maybe_start_background_fetch() -> None:
 print("Loading data...")
 global_df = load_and_clean_data()
 global_df = categorize_transactions(global_df)
+
+# Discover accounts and tag types
+account_meta = discover_accounts(global_df)
+global_df = tag_account_types(global_df, account_meta)
+print(f"Discovered {len(account_meta['accounts'])} accounts: "
+      f"{[a['name'] for a in account_meta['accounts']]}")
 
 # Fetch prices for all symbols once
 all_symbols = global_df['Symbol'].dropna().unique()
@@ -66,6 +112,47 @@ app = dash.Dash(__name__,
 server = app.server
 app.title = "Financial Dashboard"
 
+# ── Dynamic tab & filter helpers ──────────────────────────────────────────────
+def _acct_tab_id(name: str) -> str:
+    """Convert an account name to a stable tab ID."""
+    return f"acct_{name.lower().replace(' ', '_')}"
+
+
+def _build_account_tabs(meta: dict) -> list:
+    """Build the list of dbc.Tab objects from discovered account metadata."""
+    tabs = []
+
+    # One tab per individual account
+    for acct in meta['accounts']:
+        tabs.append(dbc.Tab(label=acct['name'], tab_id=_acct_tab_id(acct['name'])))
+
+    # "All Brokerage" aggregate tab if 2+ brokerage accounts exist
+    if len(meta['brokerage_accounts']) >= 2:
+        tabs.append(dbc.Tab(label='All Brokerage', tab_id='all_brokerage'))
+
+    # "Combined" tab if there are both brokerage and retirement accounts
+    if meta['brokerage_accounts'] and meta['retirement_accounts']:
+        tabs.append(dbc.Tab(label='Combined', tab_id='combined'))
+
+    return tabs
+
+
+def _filter_df(account_tab: str):
+    """Filter global_df based on the selected account tab."""
+    if account_tab == 'all_brokerage':
+        return global_df[global_df['Account'].isin(account_meta['brokerage_accounts'])].copy()
+    if account_tab == 'combined':
+        return global_df.copy()
+
+    # Individual account tab: match by tab ID → account name
+    for acct in account_meta['accounts']:
+        if _acct_tab_id(acct['name']) == account_tab:
+            return global_df[global_df['Account'] == acct['name']].copy()
+
+    # Fallback: return everything
+    return global_df.copy()
+
+
 app.layout = html.Div([
     dcc.Interval(id='fetch-status-interval', interval=3000, n_intervals=0),
     dbc.Toast(
@@ -76,45 +163,43 @@ app.layout = html.Div([
         duration=0,
         style={"position": "fixed", "top": 20, "right": 20, "width": 360, "zIndex": 9999},
     ),
+    dcc.Store(id='categories-store', data=load_categories()),
     dbc.Container([
         # Centered Apple-style Header
         html.Div([
-            html.H1("Financial Dashboard", className="text-center mb-2 text-white display-4", 
+            html.H1("Financial Dashboard", className="text-center mb-2 text-white display-4",
                     style={'fontWeight': '700', 'letterSpacing': '-0.04em'}),
-            html.P("Portfolio Analytics & Performance", 
-                   className="text-center text-muted mb-0 lead", 
+            html.P("Portfolio Analytics & Performance",
+                   className="text-center text-muted mb-0 lead",
                    style={'fontWeight': '400', 'letterSpacing': '-0.02em'}),
         ], className="dashboard-header mb-5"),
-        
+
+        # ── Dynamic account tabs ──────────────────────────────────────────────
         dbc.Row([
             dbc.Col([
-                dbc.Tabs(id='account-tabs', active_tab='individual', children=[
-                    dbc.Tab(label='Individual + ESPP', tab_id='individual'),
-                    dbc.Tab(label='401k', tab_id='401k'),
-                    dbc.Tab(label='Combined', tab_id='combined'),
-                ], className='justify-content-center mb-5'),
+                dbc.Tabs(
+                    id='account-tabs',
+                    active_tab=f"acct_{account_meta['accounts'][0]['name'].lower().replace(' ', '_')}" if account_meta['accounts'] else 'combined',
+                    children=_build_account_tabs(account_meta),
+                    className='justify-content-center mb-5',
+                ),
             ], width=12)
         ]),
-        
+
+        # Summary cards + performance charts (dynamic per account)
         html.Div(id='dashboard-content'),
-        
-        # Allocation Section
+
+        # Inner content tabs: Holdings | History
         dbc.Row([
             dbc.Col([
-                html.Div([
-                    dbc.Tabs(id='allocation-tabs', active_tab='stock', children=[
-                        dbc.Tab(label='Stock Allocation', tab_id='stock'),
-                        dbc.Tab(label='Industry Allocation', tab_id='industry')
-                    ], className='mb-4 d-inline-flex')
-                ], className="text-center mt-5 mb-3")
+                dbc.Tabs(id='content-tabs', active_tab='holdings', children=[
+                    dbc.Tab(label='Holdings', tab_id='holdings'),
+                    dbc.Tab(label='History', tab_id='history'),
+                ], className='mb-0'),
             ], width=12)
-        ]),
-        
-        dbc.Row([
-            dbc.Col([
-                html.Div(id='allocation-chart-container', className="glass-card mb-5 p-4")
-            ], width=12)
-        ])
+        ], className="mt-2"),
+        html.Div(id='content-tab-body', className="mb-5 mt-3"),
+
     ], fluid=False, className="pb-5")
 ], style={'overflowX': 'hidden'})
 
@@ -144,13 +229,8 @@ def update_fetch_status(n):
     [Input('account-tabs', 'active_tab')]
 )
 def update_dashboard(tab):
-    # Filter Data
-    if tab == 'individual':
-        df = global_df[global_df['Account'] == 'Individual'].copy()
-    elif tab == '401k':
-        df = global_df[global_df['Account'] == 'MICROSOFT 401K PLAN'].copy()
-    else: # combined
-        df = global_df.copy()
+    # Filter Data based on dynamic tab ID
+    df = _filter_df(tab)
         
     if df.empty:
         return html.Div([
@@ -191,27 +271,12 @@ def update_dashboard(tab):
 
     # Detailed Holdings & History
     current_holdings_data, realized_pnl_data = calculate_cost_basis(df)
-    
-    # Enrich Holdings with Current Price
-    if not prices.empty:
-        latest_prices = prices.iloc[-1]
-        for item in current_holdings_data:
-            sym = item['Symbol']
-            if sym in latest_prices:
-                curr_price = latest_prices[sym]
-                item['Current Price'] = curr_price
-                item['Market Value'] = item['Quantity'] * curr_price
-                item['Unrealized P/L'] = item['Market Value'] - item['Total Cost']
-                item['P/L %'] = (item['Unrealized P/L'] / item['Total Cost']) if item['Total Cost'] != 0 else 0
-            else:
-                item['Current Price'] = 0
-                item['Market Value'] = 0
-                item['Unrealized P/L'] = 0
-                item['P/L %'] = 0
+    _enrich_holdings(current_holdings_data, prices)
 
     # Calculate realized and unrealized P/L
     total_realized_pl = sum(pnl['Realized P/L'] for pnl in realized_pnl_data)
     total_unrealized_pl = sum(item.get('Unrealized P/L', 0) for item in current_holdings_data)
+    dividend_income = calculate_dividend_income(df)
 
     # Annual Performance
     yearly_data = calculate_yearly_returns(portfolio_value, daily_flows)
@@ -236,30 +301,52 @@ def update_dashboard(tab):
                         html.H2(f"${total_invested:,.2f}", className="card-title text-white"),
                         html.Hr(className="my-2 border-secondary"),
                         html.Div([
-                            # Transfers
-                            html.Div([
-                                html.Span("Transfers", className="text-muted small"),
-                                html.Span(f"${net_invested_breakdown['transfers']:,.2f}", className="float-end text-white small")
-                            ], className="d-flex justify-content-between mb-1"),
-                            # ESPP
-                            html.Div([
-                                html.Span("ESPP", className="text-muted small"),
-                                html.Span(f"${net_invested_breakdown['espp']:,.2f}", className="float-end text-white small")
-                            ], className="d-flex justify-content-between mb-1"),
-                            # Contributions – only for 401k tab
+                            # Transfers (external EFTs) — show if non-zero
+                            *(
+                                [
+                                    html.Div([
+                                        html.Span("Transfers", className="text-muted small"),
+                                        html.Span(f"${net_invested_breakdown['transfers']:,.2f}", className="float-end text-white small")
+                                    ], className="d-flex justify-content-between mb-1")
+                                ] if net_invested_breakdown['transfers'] != 0 else []
+                            ),
+                            # ESPP — show if non-zero
+                            *(
+                                [
+                                    html.Div([
+                                        html.Span("ESPP", className="text-muted small"),
+                                        html.Span(f"${net_invested_breakdown['espp']:,.2f}", className="float-end text-white small")
+                                    ], className="d-flex justify-content-between mb-1")
+                                ] if net_invested_breakdown['espp'] != 0 else []
+                            ),
+                            # Contributions – only for views that include 401k
                             *(
                                 [
                                     html.Div([
                                         html.Span("Contributions", className="text-muted small"),
                                         html.Span(f"${net_invested_breakdown['contributions']:,.2f}", className="float-end text-white small")
                                     ], className="d-flex justify-content-between mb-1")
-                                ] if tab == '401k' else []
+                                ] if net_invested_breakdown['contributions'] != 0 else []
                             ),
-                            # Withdrawals
-                            html.Div([
-                                html.Span("Withdrawals", className="text-muted small"),
-                                html.Span(f"${net_invested_breakdown['withdrawals']:,.2f}", className="float-end text-white small")
-                            ], className="d-flex justify-content-between")
+                            # Internal Transfers — show if non-zero (nets to $0 in combined views)
+                            *(
+                                [
+                                    html.Div([
+                                        html.Span("Internal Transfers", className="text-muted small"),
+                                        html.Span(f"${net_invested_breakdown['internal_transfers']:,.2f}",
+                                                   className=f"float-end small {'text-success' if net_invested_breakdown['internal_transfers'] >= 0 else 'text-danger'}")
+                                    ], className="d-flex justify-content-between mb-1")
+                                ] if abs(net_invested_breakdown['internal_transfers']) > 0.01 else []
+                            ),
+                            # Withdrawals — show if non-zero
+                            *(
+                                [
+                                    html.Div([
+                                        html.Span("Withdrawals", className="text-muted small"),
+                                        html.Span(f"${net_invested_breakdown['withdrawals']:,.2f}", className="float-end text-white small")
+                                    ], className="d-flex justify-content-between")
+                                ] if net_invested_breakdown['withdrawals'] != 0 else []
+                            ),
                         ])
                     ], className="p-3")
                 ], className="glass-card h-100")
@@ -278,6 +365,10 @@ def update_dashboard(tab):
                             html.Div([
                                 html.Span("Unrealized", className="text-muted small"),
                                 html.Span(f"${total_unrealized_pl:,.2f}", className="float-end small", style={'color': 'var(--apple-green)' if total_unrealized_pl >= 0 else 'var(--apple-red)'})
+                            ], className="d-flex justify-content-between mb-1"),
+                            html.Div([
+                                html.Span("Dividends (net)", className="text-muted small"),
+                                html.Span(f"${dividend_income:,.2f}", className=f"float-end {'text-success' if dividend_income >= 0 else 'text-danger'} small")
                             ], className="d-flex justify-content-between")
                         ])
                     ], className="p-3")
@@ -305,81 +396,112 @@ def update_dashboard(tab):
                 ], className="glass-card p-4 h-100")
             ], width=12, lg=4, className="mb-5")
         ]),
-        
-        # Allocation Tab (Stock vs Industry) - MOVED TO STATIC LAYOUT
-        # We removed it from here to avoid callback ID errors
-        
-        dbc.Row([
-            dbc.Col([
-                html.Div([
-                    html.H4("Current Holdings", className="text-white mb-4"),
-                    create_holdings_table(current_holdings_data)
-                ], className="glass-card p-4")
-            ], width=12, className="mb-5")
-        ]),
-
-        dbc.Row([
-            dbc.Col([
-                html.Div([
-                    html.H4("Transaction History (Realized P/L)", className="text-white mb-4"),
-                    create_history_table(realized_pnl_data)
-                ], className="glass-card p-4")
-            ], width=12, className="mb-5")
-        ])
     ])
 
-# Helper to get holdings (moved from update_dashboard)
-def get_current_holdings(df):
-    holdings_dict = {}
-    for _, row in df.iterrows():
-        if row['Category'] == 'BUY':
-            sym = row['Symbol']
-            qty = row['Quantity']
-            holdings_dict[sym] = holdings_dict.get(sym, 0) + qty
-        elif row['Category'] == 'SELL':
-            sym = row['Symbol']
-            qty = abs(row['Quantity'])
-            holdings_dict[sym] = max(0, holdings_dict.get(sym, 0) - qty)
-        elif row['Category'] == 'Split':
-            sym = row['Symbol']
-            ratio = row['Quantity']
-            if sym in holdings_dict:
-                holdings_dict[sym] = holdings_dict[sym] * ratio
-                
-    holdings_df = pd.DataFrame([holdings_dict])
-    return holdings_df
+
 
 @app.callback(
-    Output('allocation-chart-container', 'children'),
-    [Input('allocation-tabs', 'active_tab'), Input('account-tabs', 'active_tab')]
+    Output('content-tab-body', 'children'),
+    Input('content-tabs', 'active_tab'),
+    Input('account-tabs', 'active_tab'),
+    Input('categories-store', 'data'),
 )
-def update_allocation_chart(allocation_tab, account_tab):
-    # Filter Data (Same logic as main callback)
-    if account_tab == 'individual':
-        df = global_df[global_df['Account'] == 'Individual'].copy()
-    elif account_tab == '401k':
-        df = global_df[global_df['Account'] == 'MICROSOFT 401K PLAN'].copy()
-    elif account_tab == 'combined':
-        df = global_df.copy()
-    else:
-        df = global_df[global_df['Account'] == 'Individual'].copy()
-
-    # Get Holdings
+def update_content_tab(content_tab, account_tab, categories_data):
+    df = _filter_df(account_tab)
     if df.empty:
-        return html.Div("No data available", className="text-white")
+        return html.Div("No data available.", className="text-muted p-4")
 
-    # Sort by date
-    df = df.sort_values('Run Date')
-    
-    holdings = get_current_holdings(df)
-    
-    # Render
-    title = "Stock Allocation" if (allocation_tab or 'stock') == 'stock' else "Industry Allocation"
-    chart = create_stock_performance_chart(holdings, global_prices) if (allocation_tab or 'stock') == 'stock' else create_industry_allocation_chart(holdings, global_prices, global_sectors)
-    
+    current_holdings_data, realized_pnl_data = calculate_cost_basis(df)
+    _enrich_holdings(current_holdings_data, global_prices)
+
+    if content_tab == 'history':
+        return html.Div([
+            html.H4("Transaction History (Realized P/L)", className="text-white mb-4"),
+            create_history_table(realized_pnl_data)
+        ], className="glass-card p-4")
+
+    # holdings tab: Portfolio (pinned) + user categories + create form
+    categories = categories_data or {}
+    cash = get_current_cash(df)
+    total_portfolio_value = sum(h.get('Market Value', 0) for h in current_holdings_data) + cash
+    held_symbols = sorted(h['Symbol'] for h in current_holdings_data)
+    symbol_options = [{'label': s, 'value': s} for s in held_symbols]
+
+    accordion_items = [
+        create_category_accordion_item(
+            "Portfolio", current_holdings_data, total_portfolio_value, deletable=False, cash=cash
+        )
+    ]
+    for cat_name, cat_symbols in categories.items():
+        cat_holdings = [h for h in current_holdings_data if h['Symbol'] in cat_symbols]
+        accordion_items.append(
+            create_category_accordion_item(cat_name, cat_holdings, total_portfolio_value)
+        )
+
     return html.Div([
-        chart
+        dbc.Accordion(accordion_items, start_collapsed=True, className="category-accordion mb-4"),
+        html.Div([
+            html.H6("Create Category", className="text-white mb-3"),
+            dbc.Row([
+                dbc.Col(
+                    dbc.Input(
+                        id='category-name-input',
+                        placeholder='Category name (e.g. Memory, Quantum)...',
+                        style={'backgroundColor': 'rgba(255,255,255,0.07)',
+                               'border': '1px solid rgba(255,255,255,0.2)',
+                               'color': 'white'},
+                    ),
+                    width=12, md=4, className="mb-2 mb-md-0"
+                ),
+                dbc.Col(
+                    dcc.Dropdown(
+                        id='category-symbols-dropdown',
+                        options=symbol_options,
+                        multi=True,
+                        placeholder='Select stocks...',
+                        style={'backgroundColor': 'rgba(30,30,30,0.9)'},
+                    ),
+                    width=12, md=6, className="mb-2 mb-md-0"
+                ),
+                dbc.Col(
+                    dbc.Button('Create', id='create-category-btn',
+                               color='primary', n_clicks=0, className="w-100"),
+                    width=12, md=2
+                ),
+            ], className="align-items-center"),
+        ], className="glass-card p-4", style={"position": "relative", "zIndex": 10}),
     ])
+
+
+@app.callback(
+    Output('categories-store', 'data'),
+    Output('category-name-input', 'value'),
+    Output('category-symbols-dropdown', 'value'),
+    Input('create-category-btn', 'n_clicks'),
+    Input({'type': 'delete-category-btn', 'index': ALL}, 'n_clicks'),
+    State('category-name-input', 'value'),
+    State('category-symbols-dropdown', 'value'),
+    State('categories-store', 'data'),
+    prevent_initial_call=True,
+)
+def manage_categories(_create, _deletes, name, symbols, current_cats):
+    current_cats = current_cats or {}
+    triggered = ctx.triggered_id
+
+    if triggered == 'create-category-btn':
+        if name and name.strip() and symbols:
+            current_cats[name.strip()] = symbols
+            save_categories(current_cats)
+            return current_cats, '', None
+        return current_cats, name, symbols
+
+    if isinstance(triggered, dict) and triggered.get('type') == 'delete-category-btn':
+        cat_name = triggered['index']
+        current_cats.pop(cat_name, None)
+        save_categories(current_cats)
+
+    return current_cats, name, symbols
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=8050)

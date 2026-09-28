@@ -294,33 +294,35 @@ def create_industry_allocation_chart(holdings, prices, sector_data):
 def create_holdings_table(holdings_data):
     if not holdings_data:
         return html.Div("No holdings data available", className="text-muted")
-        
+
     df = pd.DataFrame(holdings_data)
-    
-    # Custom Header for dbc.Table
+    total_value = df['Market Value'].sum()
+
     header = html.Thead(html.Tr([
         html.Th("Symbol", style={'textAlign': 'left'}),
         html.Th("Qty", style={'textAlign': 'right'}),
         html.Th("Avg Cost", style={'textAlign': 'right'}),
         html.Th("Price", style={'textAlign': 'right'}),
         html.Th("Value", style={'textAlign': 'right'}),
+        html.Th("Portfolio %", style={'textAlign': 'right'}),
         html.Th("P/L", style={'textAlign': 'right'}),
-        html.Th("%", style={'textAlign': 'right'}),
+        html.Th("P/L %", style={'textAlign': 'right'}),
     ]))
-    
-    # Custom Rows with Conditional Styling
+
     rows = []
     for _, row in df.iterrows():
         pl = row['Unrealized P/L']
         pl_pct = row['P/L %']
+        portfolio_pct = row['Market Value'] / total_value if total_value else 0
         pl_color = "var(--apple-green)" if pl >= 0 else "var(--apple-red)"
-        
+
         rows.append(html.Tr([
             html.Td(row['Symbol'], style={'textAlign': 'left', 'fontWeight': '600'}),
             html.Td(f"{row['Quantity']:,.2f}", style={'textAlign': 'right'}),
             html.Td(f"${row['Avg Cost']:,.2f}", style={'textAlign': 'right'}),
             html.Td(f"${row['Current Price']:,.2f}", style={'textAlign': 'right'}),
             html.Td(f"${row['Market Value']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"{portfolio_pct:.1%}", style={'textAlign': 'right', 'color': 'rgba(255,255,255,0.7)'}),
             html.Td(f"${pl:+,.2f}", style={'textAlign': 'right', 'color': pl_color, 'fontWeight': '600'}),
             html.Td(f"{pl_pct:+.2%}", style={'textAlign': 'right', 'color': pl_color, 'fontWeight': '600'}),
         ]))
@@ -341,10 +343,12 @@ def create_history_table(history_data):
         return html.Div("No transaction history available", className="text-muted")
         
     df = pd.DataFrame(history_data)
-    
+
     if not df.empty and 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-    
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.sort_values('Date', ascending=False)
+        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+
     total_pnl = df['Realized P/L'].sum()
     
     # Custom Header
@@ -390,6 +394,105 @@ def create_history_table(history_data):
             )
         ], style={'maxHeight': '500px', 'overflowY': 'auto', 'borderRadius': '12px'})
     ])
+
+def create_category_accordion_item(
+    name: str,
+    holdings_in_category: list,
+    total_portfolio_value: float,
+    deletable: bool = True,
+    cash: float = 0.0,
+) -> 'dbc.AccordionItem':
+    show_cash = abs(cash) >= 0.01
+    total_pl = sum(h.get('Unrealized P/L', 0) for h in holdings_in_category)
+    total_cost = sum(h.get('Total Cost', 0) for h in holdings_in_category)
+    total_value = sum(h.get('Market Value', 0) for h in holdings_in_category) + cash
+    total_pl_pct = (total_pl / total_cost) if total_cost else 0
+    pl_color = "var(--apple-green)" if total_pl >= 0 else "var(--apple-red)"
+
+    title = html.Div([
+        html.Span(name, style={'fontWeight': '600', 'fontSize': '1rem', 'color': 'white'}),
+        html.Div([
+            html.Span(f"${total_value:,.2f}",
+                      style={'color': 'rgba(255,255,255,0.6)', 'fontWeight': '500',
+                             'fontSize': '0.9rem', 'marginRight': '16px'}),
+            html.Span(f"${total_pl:+,.2f}",
+                      style={'color': pl_color, 'fontWeight': '700'}),
+            html.Span(f" ({total_pl_pct:+.2%})",
+                      style={'color': pl_color, 'fontWeight': '500', 'fontSize': '0.88rem',
+                             'marginRight': '2rem'}),
+        ], className="d-flex align-items-center"),
+    ], className="d-flex justify-content-between align-items-center w-100")
+
+    if holdings_in_category or show_cash:
+        header_row = html.Thead(html.Tr([
+            html.Th("Symbol", style={'textAlign': 'left'}),
+            html.Th("Qty", style={'textAlign': 'right'}),
+            html.Th("Avg Cost", style={'textAlign': 'right'}),
+            html.Th("Price", style={'textAlign': 'right'}),
+            html.Th("Value", style={'textAlign': 'right'}),
+            html.Th("Portfolio %", style={'textAlign': 'right'}),
+            html.Th("P/L", style={'textAlign': 'right'}),
+            html.Th("P/L %", style={'textAlign': 'right'}),
+        ]))
+        rows = []
+        for h in holdings_in_category:
+            h_pl = h.get('Unrealized P/L', 0)
+            h_pct = h.get('P/L %', 0)
+            h_val = h.get('Market Value', 0)
+            port_pct = (h_val / total_portfolio_value) if total_portfolio_value else 0
+            c = "var(--apple-green)" if h_pl >= 0 else "var(--apple-red)"
+            rows.append(html.Tr([
+                html.Td(h['Symbol'], style={'textAlign': 'left', 'fontWeight': '600'}),
+                html.Td(f"{h['Quantity']:,.2f}", style={'textAlign': 'right'}),
+                html.Td(f"${h.get('Avg Cost', 0):,.2f}", style={'textAlign': 'right'}),
+                html.Td(f"${h.get('Current Price', 0):,.2f}", style={'textAlign': 'right'}),
+                html.Td(f"${h_val:,.2f}", style={'textAlign': 'right'}),
+                html.Td(f"{port_pct:.1%}",
+                        style={'textAlign': 'right', 'color': 'rgba(255,255,255,0.7)'}),
+                html.Td(f"${h_pl:+,.2f}",
+                        style={'textAlign': 'right', 'color': c, 'fontWeight': '600'}),
+                html.Td(f"{h_pct:+.2%}",
+                        style={'textAlign': 'right', 'color': c, 'fontWeight': '600'}),
+            ]))
+        if show_cash:
+            cash_pct = (cash / total_portfolio_value) if total_portfolio_value else 0
+            muted = {'textAlign': 'right', 'color': 'rgba(255,255,255,0.4)'}
+            rows.append(html.Tr([
+                html.Td("Cash", style={'textAlign': 'left', 'fontWeight': '600'}),
+                html.Td("—", style=muted),
+                html.Td("—", style=muted),
+                html.Td("—", style=muted),
+                html.Td(f"${cash:,.2f}", style={'textAlign': 'right'}),
+                html.Td(f"{cash_pct:.1%}",
+                        style={'textAlign': 'right', 'color': 'rgba(255,255,255,0.7)'}),
+                html.Td("—", style=muted),
+                html.Td("—", style=muted),
+            ]))
+        body_content = html.Div([
+            dbc.Table(
+                [header_row, html.Tbody(rows)],
+                className="glass-table mb-0",
+                responsive=True, hover=True, borderless=True, size="sm",
+            )
+        ], className="table-responsive")
+    else:
+        body_content = html.P(
+            "None of these stocks are held in the selected account.",
+            className="text-muted small mb-0"
+        )
+
+    footer = html.Div(
+        dbc.Button("Delete category", id={'type': 'delete-category-btn', 'index': name},
+                   size="sm", color="danger", outline=True, n_clicks=0, className="mt-3"),
+        className="text-end"
+    ) if deletable else None
+
+    return dbc.AccordionItem(
+        children=html.Div([body_content, footer] if footer else [body_content]),
+        title=title,
+        item_id=name,
+    )
+
 
 def create_yearly_returns_chart(yearly_data):
     if not yearly_data:

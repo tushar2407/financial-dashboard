@@ -191,3 +191,144 @@ h6 {
     background: rgba(255, 255, 255, 0.1) !important;
     color: #fff !important;
 }
+
+/* ── Category accordion ──────────────────────────────────────────────────── */
+.category-accordion .accordion-item {
+    background: var(--glass-bg) !important;
+    border: none !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.category-accordion .accordion-item:first-child {
+    border-radius: 16px 16px 0 0 !important;
+}
+
+.category-accordion .accordion-item:last-child {
+    border-radius: 0 0 16px 16px !important;
+    border-bottom: none !important;
+}
+
+.category-accordion .accordion-item:only-child {
+    border-radius: 16px !important;
+}
+
+.category-accordion .accordion-button {
+    background: transparent !important;
+    color: white !important;
+    box-shadow: none !important;
+    padding: 16px 20px !important;
+}
+
+.category-accordion .accordion-button:not(.collapsed) {
+    background: rgba(255, 255, 255, 0.04) !important;
+    box-shadow: none !important;
+}
+
+.category-accordion .accordion-button:hover {
+    background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.category-accordion .accordion-button::after {
+    filter: invert(1) opacity(0.5) !important;
+}
+
+.category-accordion .accordion-button:not(.collapsed)::after {
+    filter: invert(1) opacity(0.8) !important;
+}
+
+.category-accordion .accordion-body {
+    background: rgba(0, 0, 0, 0.2) !important;
+    color: rgba(255, 255, 255, 0.85) !important;
+    padding: 4px 20px 16px !important;
+}
+
+/* ── dcc.Dropdown dark theme ─────────────────────────────────────────────── */
+.Select-control,
+.Select.is-open > .Select-control {
+    background-color: rgba(255, 255, 255, 0.07) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    border-radius: 8px !important;
+    color: #fff !important;
+    box-shadow: none !important;
+}
+
+.Select-placeholder,
+.Select--single > .Select-control .Select-value {
+    color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.Select-input > input {
+    color: #fff !important;
+}
+
+.Select-menu-outer {
+    background-color: #1a1a1a !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
+    position: absolute !important;
+    z-index: 9999 !important;
+}
+
+.Select-option {
+    background-color: transparent !important;
+    color: rgba(255, 255, 255, 0.85) !important;
+}
+
+.Select-option:hover,
+.Select-option.is-focused {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #fff !important;
+}
+
+.Select-option.is-selected {
+    background-color: rgba(0, 122, 255, 0.25) !important;
+    color: #fff !important;
+}
+
+.Select-multi-value-wrapper {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+}
+
+.Select-input > input {
+    caret-color: rgba(255, 255, 255, 0.7) !important;
+}
+
+.Select-value {
+    background-color: rgba(0, 122, 255, 0.2) !important;
+    border: 1px solid rgba(0, 122, 255, 0.4) !important;
+    border-radius: 6px !important;
+    color: #fff !important;
+}
+
+.Select-value-label {
+    color: #fff !important;
+}
+
+.Select-value-icon {
+    border-right: 1px solid rgba(0, 122, 255, 0.4) !important;
+    color: rgba(255, 255, 255, 0.6) !important;
+}
+
+.Select-value-icon:hover {
+    background-color: rgba(255, 59, 48, 0.3) !important;
+    color: #fff !important;
+}
+
+.Select-arrow {
+    border-top-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.Select.is-open .Select-arrow {
+    border-bottom-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.Select-clear {
+    color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.Select-clear:hover {
+    color: #fff !important;
+}

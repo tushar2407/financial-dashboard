@@ -89,9 +89,8 @@ def get_daily_cash_flows(df):
     if df.empty:
         return pd.Series(dtype=float)
 
-    # Filter for Deposits, Withdrawals, and 401k BUY contributions
-    # We include BUY rows only when they belong to the 401k account (i.e., contributions)
-    transfers = df[df['Category'].isin(['DEPOSIT', 'WITHDRAWAL', 'BUY'])].copy()
+    # Filter for Deposits, Withdrawals, 401k BUY contributions, and internal transfers
+    transfers = df[df['Category'].isin(['DEPOSIT', 'WITHDRAWAL', 'BUY', 'INTERNAL_TRANSFER'])].copy()
     
     if transfers.empty:
         return pd.Series(dtype=float)
@@ -102,8 +101,13 @@ def get_daily_cash_flows(df):
     for _, row in transfers.iterrows():
         amount = 0
         if row['Category'] == 'BUY':
-            if row.get('Account') == 'MICROSOFT 401K PLAN':
+            # Retirement account BUYs are contributions (capital inflow)
+            if row.get('Account Type') == 'retirement':
                 amount = abs(row['Amount'])
+        elif row['Category'] == 'INTERNAL_TRANSFER':
+            # Internal transfers are capital inflows/outflows for individual account views.
+            # In combined views (where both sides are present), they net to $0.
+            amount = row['Amount']
         else:
             amount = row['Amount']
         
@@ -162,19 +166,39 @@ def calculate_net_invested_breakdown(df):
         )
     ]['Amount'].abs().sum()
     
-    # 401k contributions are BUY transactions with a non‑MSFT symbol (mutual‑fund names) and must belong to the 401k account
-    contributions = df[(df['Category'] == 'BUY') & (df['Account'] == 'MICROSOFT 401K PLAN') & (~df['Symbol'].isin(['MSFT']))]['Amount'].abs().sum()
+    # Retirement account contributions (BUY transactions in 401k/IRA/etc.)
+    contributions = df[
+        (df['Category'] == 'BUY') &
+        (df.get('Account Type', pd.Series(dtype=str)) == 'retirement')
+    ]['Amount'].abs().sum() if 'Account Type' in df.columns else 0
     
     # Withdrawals (including any negative DEPOSIT amounts if they exist)
     withdrawals = df[df['Category'] == 'WITHDRAWAL']['Amount'].sum()
+
+    # Internal transfers between brokerage accounts
+    internal_transfers = df[df['Category'] == 'INTERNAL_TRANSFER']['Amount'].sum()
     
     return {
         'transfers': transfers,
         'espp': espp,
         'contributions': contributions,
         'withdrawals': withdrawals,
-        'total': transfers + espp + contributions + withdrawals
+        'internal_transfers': internal_transfers,
+        'total': transfers + espp + contributions + withdrawals + internal_transfers
     }
+
+def calculate_dividend_income(df) -> float:
+    """Dividends received, net of foreign tax withheld and fees.
+
+    This is the part of Total P&L that Realized and Unrealized P/L miss:
+    reinvested dividends become lots at their own cost, so they add no
+    unrealized gain.
+    """
+    if df.empty:
+        return 0.0
+    income = df[df['Category'].isin(['DIVIDEND', 'TAX', 'FEE'])]['Amount'].sum()
+    return float(income)
+
 
 def calculate_performance_metrics(portfolio_series, daily_cash_flows):
     """
