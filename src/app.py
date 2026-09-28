@@ -74,6 +74,13 @@ all_symbols = global_df['Symbol'].dropna().unique()
 all_symbols = [s for s in all_symbols if isinstance(s, str) and s.strip() != '']
 start_date = global_df['Run Date'].min().strftime('%Y-%m-%d')
 global_prices = fetch_price_data(all_symbols, start_date, tx_df=global_df)
+
+# Held symbols valued at an old trade price because the market download failed
+_held_symbols = {h['Symbol'] for h in calculate_cost_basis(global_df)[0]}
+stale_held_symbols = sorted(_held_symbols & set(global_prices.attrs.get('stale_symbols', [])))
+if stale_held_symbols:
+    print(f"\nWARNING: no recent market price for {len(stale_held_symbols)} holding(s); "
+          f"valuing them at their last trade price: {', '.join(stale_held_symbols)}\n")
 global_sectors = fetch_sector_data(all_symbols)
 
 app = dash.Dash(__name__,
@@ -141,6 +148,16 @@ app.layout = html.Div([
                    className="text-center text-muted mb-0 lead",
                    style={'fontWeight': '400', 'letterSpacing': '-0.02em'}),
         ], className="dashboard-header mb-5"),
+
+        dbc.Alert(
+            [
+                html.Strong("Prices are out of date. "),
+                f"Market prices for {len(stale_held_symbols)} holding(s) could not be downloaded, "
+                f"so they are valued at their last trade price: {', '.join(stale_held_symbols)}. "
+                "Upgrade yfinance (pip install -U yfinance) or start the app with venv/bin/python.",
+            ],
+            color="warning", className="mb-4",
+        ) if stale_held_symbols else None,
 
         # ── Dynamic account tabs ──────────────────────────────────────────────
         dbc.Row([

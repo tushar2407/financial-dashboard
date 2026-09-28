@@ -511,6 +511,26 @@ def fetch_sector_data(symbols):
             
     return cache
 
+# A market price older than this (in days) means the download failed for that
+# symbol; 5 days covers weekends and market holidays.
+MAX_PRICE_AGE_DAYS = 5
+
+
+def find_stale_price_symbols(market_data, symbols, today=None, max_age_days=MAX_PRICE_AGE_DAYS):
+    """Symbols whose downloaded market price is missing or older than max_age_days.
+
+    Such symbols silently fall back to their last transaction price, which can be
+    months old, so callers should warn about them.
+    """
+    cutoff = pd.Timestamp(today or datetime.now()).normalize() - pd.Timedelta(days=max_age_days)
+    stale = []
+    for s in symbols:
+        series = market_data[s].dropna() if s in market_data.columns else pd.Series(dtype=float)
+        if series.empty or series.index[-1] < cutoff:
+            stale.append(s)
+    return stale
+
+
 def fetch_price_data(symbols, start_date, tx_df=None):
     """
     Fetches historical price data for the given symbols.
@@ -525,7 +545,7 @@ def fetch_price_data(symbols, start_date, tx_df=None):
     }
 
     # Symbols that can't be fetched from Yahoo (money markets, 401k mutual funds, etc.)
-    _SKIP_SYMBOLS = {'SPAXX', 'nan', 'NAN', ''}
+    _SKIP_SYMBOLS = {'SPAXX', BROKERAGELINK_PLACEHOLDER, 'nan', 'NAN', ''}
 
     valid_symbols = []
     reverse_map = {}  # To map back SPLG -> SPYM if needed
@@ -662,7 +682,9 @@ def fetch_price_data(symbols, start_date, tx_df=None):
         
     # Forward fill to propagate last known price
     combined_prices = combined_prices.ffill()
-    
+
+    requested = [reverse_map.get(s, s) for s in valid_symbols]
+    combined_prices.attrs['stale_symbols'] = find_stale_price_symbols(market_data, requested)
     return combined_prices
 
 def calculate_portfolio_value(holdings_df, price_df):
