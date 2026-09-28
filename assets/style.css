@@ -379,3 +379,9 @@ h6 {
 .info-tooltip .tooltip-inner p {
     margin-bottom: 6px;
 }
+
+/* Summary card row: five equal cards on wide screens; keep big numbers on one line */
+.summary-row .card-title {
+    font-size: clamp(1.5rem, 2vw, 2.25rem);
+    white-space: nowrap;
+}
