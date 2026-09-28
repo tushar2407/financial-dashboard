@@ -119,7 +119,10 @@ def categorize_transactions(df):
         action = str(row['Action']).upper()
         description = str(row['Description']).upper()
         
-        if "ELECTRONIC FUNDS TRANSFER" in action or "ELECTRONIC FUNDS TRANSFER" in description:
+        # Inter-account transfers (between Fidelity brokerage accounts)
+        if "TRANSFERRED TO" in action or "TRANSFERRED FROM" in action:
+            return "INTERNAL_TRANSFER"
+        elif "ELECTRONIC FUNDS TRANSFER" in action or "ELECTRONIC FUNDS TRANSFER" in description:
             if row['Amount'] > 0:
                 return "DEPOSIT"
             else:
@@ -138,13 +141,139 @@ def categorize_transactions(df):
             return "REINVESTMENT"
         elif "FOREIGN TAX" in action:
             return "TAX"
-        elif "ADVISORY FEE" in action:
+        elif "ADVISORY FEE" in action or "FEE CHARGED" in action:
             return "FEE"
         else:
             return "OTHER"
 
-    df['Category'] = df.apply(get_category, axis=1)
+    categorized = df.assign(Category=df.apply(get_category, axis=1))
+    return _mark_round_trip_transfers(categorized)
+
+
+# A withdrawal returned to the same account in full within this many days is
+# money that never really left the portfolio (e.g. a reversed or re-deposited
+# bank transfer), so neither leg counts as a withdrawal or deposit.
+ROUND_TRIP_MAX_DAYS = 10
+
+
+def _mark_round_trip_transfers(df):
+    """Recategorizes matched WITHDRAWAL -> DEPOSIT pairs as ROUND_TRIP_TRANSFER.
+
+    A pair matches when the deposit is in the same account, for the same
+    absolute amount, and lands 0..ROUND_TRIP_MAX_DAYS days after the
+    withdrawal. Each deposit matches at most one withdrawal. Pairs sum to
+    zero, so net invested is unchanged; only the gross totals shrink.
+    """
+    withdrawals = df[df['Category'] == 'WITHDRAWAL'].sort_values('Run Date')
+    deposits = df[df['Category'] == 'DEPOSIT'].sort_values('Run Date')
+    if withdrawals.empty or deposits.empty:
+        return df
+
+    max_gap = pd.Timedelta(days=ROUND_TRIP_MAX_DAYS)
+    matched = set()
+    for w_idx, w in withdrawals.iterrows():
+        candidates = deposits[
+            (deposits['Account'] == w['Account'])
+            & (deposits['Amount'] == -w['Amount'])
+            & (deposits['Run Date'] >= w['Run Date'])
+            & (deposits['Run Date'] - w['Run Date'] <= max_gap)
+            & ~deposits.index.isin(matched)
+        ]
+        if not candidates.empty:
+            matched |= {w_idx, candidates.index[0]}
+
+    if not matched:
+        return df
+    is_round_trip = df.index.isin(matched)
+    return df.assign(Category=df['Category'].where(~is_round_trip, 'ROUND_TRIP_TRANSFER'))
+
+
+# ── Retirement account keywords ───────────────────────────────────────────────
+_RETIREMENT_KEYWORDS = ['401K', '401(K)', 'IRA', 'ROTH', 'RETIREMENT', 'PENSION']
+
+
+def _classify_account_type(account_name: str) -> str:
+    """Classify an account as 'brokerage' or 'retirement' based on its name."""
+    upper = account_name.upper()
+    for kw in _RETIREMENT_KEYWORDS:
+        if kw in upper:
+            return 'retirement'
+    return 'brokerage'
+
+
+def discover_accounts(df) -> dict:
+    """
+    Discovers all accounts present in the dataframe and classifies them.
+
+    Returns a dict with:
+      - accounts: list of dicts with name, number, type, row_count
+      - brokerage_accounts: list of brokerage account names
+      - retirement_accounts: list of retirement account names
+    """
+    if df.empty:
+        return {'accounts': [], 'brokerage_accounts': [], 'retirement_accounts': []}
+
+    accounts = []
+    for acct_name in df['Account'].dropna().unique():
+        acct_df = df[df['Account'] == acct_name]
+        acct_num = ''
+        if 'Account Number' in df.columns:
+            nums = acct_df['Account Number'].dropna().unique()
+            acct_num = str(nums[0]) if len(nums) > 0 else ''
+
+        accounts.append({
+            'name': acct_name,
+            'number': acct_num,
+            'type': _classify_account_type(acct_name),
+            'row_count': len(acct_df),
+        })
+
+    # Sort: brokerage first (by row count desc), then retirement
+    accounts.sort(key=lambda a: (0 if a['type'] == 'brokerage' else 1, -a['row_count']))
+
+    brokerage = [a['name'] for a in accounts if a['type'] == 'brokerage']
+    retirement = [a['name'] for a in accounts if a['type'] == 'retirement']
+
+    return {
+        'accounts': accounts,
+        'brokerage_accounts': brokerage,
+        'retirement_accounts': retirement,
+    }
+
+
+def tag_account_types(df, account_meta: dict) -> pd.DataFrame:
+    """Adds an 'Account Type' column ('brokerage' or 'retirement') to the df."""
+    type_map = {a['name']: a['type'] for a in account_meta['accounts']}
+    df['Account Type'] = df['Account'].map(type_map).fillna('brokerage')
     return df
+
+
+# Categories whose Amount moves cash in or out of the account. A reinvested
+# dividend appears as DIVIDEND (+) and REINVESTMENT (-) on the same day, so
+# both must be counted or the dividend is double-counted as cash and shares.
+CASH_CATEGORIES = {'DEPOSIT', 'WITHDRAWAL', 'SELL', 'BUY', 'DIVIDEND', 'REINVESTMENT',
+                   'TAX', 'FEE', 'INTERNAL_TRANSFER'}
+SHARE_CHANGING_CATEGORIES = {'BUY', 'SELL', 'REINVESTMENT', 'DISTRIBUTION'}
+
+
+def _cash_delta(row) -> float:
+    """Change in uninvested cash caused by one categorized transaction."""
+    category = row['Category']
+    if category not in CASH_CATEGORIES:
+        return 0.0
+    # Retirement (401k etc.) BUYs are the contribution itself; the money never
+    # sat in the account as cash.
+    if category == 'BUY' and row.get('Account Type', '') == 'retirement':
+        return 0.0
+    return row['Amount']
+
+
+def get_current_cash(df) -> float:
+    """Current uninvested cash balance implied by the transactions."""
+    if df.empty:
+        return 0.0
+    return float(sum(_cash_delta(row) for _, row in df.iterrows()))
+
 
 def get_portfolio_history(df):
     """
@@ -202,47 +331,13 @@ def get_portfolio_history(df):
                 symbol = row['Symbol']
                 action = row['Category']
                 qty = row['Quantity']
-                amount = row['Amount']
-                
-                # Update Cash Balance
-                # DEPOSIT (+), WITHDRAWAL (-), SELL (+), DIVIDEND (+), TAX (-), FEE (-)
-                # BUY (-), REINVESTMENT (- but usually net 0)
-                
-                if action == 'DEPOSIT':
-                    cash_balance += amount
-                elif action == 'WITHDRAWAL':
-                    cash_balance += amount # amount is negative
-                elif action == 'SELL':
-                    cash_balance += amount # amount is positive
-                    if symbol in current_holdings:
-                        current_holdings[symbol] += qty # qty is negative
-                elif action == 'BUY':
-                    # For 401k, BUY is often the contribution itself (no external DEPOSIT sometimes)
-                    # Let's check Account
-                    if row.get('Account') == 'MICROSOFT 401K PLAN':
-                        # In 401k, BUY is the "inflow"
-                        # Securities increase, but cash doesn't decrease (it was never there as cash)
-                        pass 
-                    else:
-                        cash_balance += amount # amount is negative
-                        
+                cash_balance += _cash_delta(row)
+
+                # Share quantity changes
+                if action in SHARE_CHANGING_CATEGORIES:
                     if symbol not in current_holdings:
                         current_holdings[symbol] = 0.0
-                    current_holdings[symbol] += qty
-                elif action == 'DIVIDEND':
-                    cash_balance += amount
-                elif action == 'REINVESTMENT':
-                    # REINVESTMENT is BUY using DIVIDEND. Net cash change is 0.
-                    # Securities increase.
-                    if symbol not in current_holdings:
-                        current_holdings[symbol] = 0.0
-                    current_holdings[symbol] += qty
-                elif action == 'DISTRIBUTION':
-                    if symbol not in current_holdings:
-                        current_holdings[symbol] = 0.0
-                    current_holdings[symbol] += qty
-                elif action in ['TAX', 'FEE']:
-                    cash_balance += amount
+                    current_holdings[symbol] += qty  # qty is negative for SELL
                     
         # Store daily snapshot
         snapshot = current_holdings.copy()
@@ -346,13 +441,14 @@ def fetch_sector_data(symbols):
             updated = True
             
             # Sleep to avoid rate limits
-            time.sleep(1.2) 
+            time.sleep(2)
             
         except Exception as e:
             print(f"Error fetching sector for {sym}: {e}")
             cache[sym] = 'Unknown' # Mark as Unknown so we don't retry forever
             updated = True
-            time.sleep(1)
+            # Back off more aggressively on errors (likely 429)
+            time.sleep(5)
             
     # Save cache if updated
     if updated:
@@ -373,16 +469,29 @@ def fetch_price_data(symbols, start_date, tx_df=None):
     """
     print(f"Fetching data for: {symbols}")
     
-    # Mapping for known issues
+    # Mapping for known issues / renames
     ticker_map = {
         # 'SPYM': 'SPLG', 
         '565849106': None, 
     }
-    
+
+    # Symbols that can't be fetched from Yahoo (money markets, 401k mutual funds, etc.)
+    _SKIP_SYMBOLS = {'SPAXX', 'nan', 'NAN', ''}
+
     valid_symbols = []
-    reverse_map = {} # To map back SPLG -> SPYM if needed, or just use mapped
+    reverse_map = {}  # To map back SPLG -> SPYM if needed
     
     for s in symbols:
+        # Skip known unfetchable symbols
+        if s in _SKIP_SYMBOLS:
+            continue
+        # Skip symbols with spaces (mutual fund names like 'FID GR CO POOL CL S')
+        if ' ' in str(s):
+            continue
+        # Skip pure numeric CUSIPs
+        if str(s).isdigit():
+            continue
+
         mapped = ticker_map.get(s, s)
         if mapped:
             valid_symbols.append(mapped)
@@ -391,14 +500,35 @@ def fetch_price_data(symbols, start_date, tx_df=None):
     if not valid_symbols:
         return pd.DataFrame()
 
-    # 1. Fetch Market Data
-    try:
-        market_data = yf.download(valid_symbols, start=start_date, progress=False)['Close']
-        if isinstance(market_data, pd.Series):
-            market_data = market_data.to_frame(name=valid_symbols[0])
-    except Exception as e:
-        print(f"Error fetching market data: {e}")
-        market_data = pd.DataFrame()
+    # 1. Fetch Market Data in batches to avoid Yahoo rate limits
+    BATCH_SIZE = 20
+    market_data = pd.DataFrame()
+    for batch_start in range(0, len(valid_symbols), BATCH_SIZE):
+        batch = valid_symbols[batch_start:batch_start + BATCH_SIZE]
+        print(f"  Fetching price batch {batch_start // BATCH_SIZE + 1}"
+              f"/{(len(valid_symbols) + BATCH_SIZE - 1) // BATCH_SIZE}"
+              f" ({len(batch)} symbols)...")
+
+        for attempt in range(3):  # Retry up to 3 times per batch
+            try:
+                batch_data = yf.download(batch, start=start_date, progress=False)['Close']
+                if isinstance(batch_data, pd.Series):
+                    batch_data = batch_data.to_frame(name=batch[0])
+                if market_data.empty:
+                    market_data = batch_data
+                else:
+                    market_data = market_data.join(batch_data, how='outer')
+                break  # Success — move to next batch
+            except Exception as e:
+                wait = 2 ** (attempt + 1)  # 2s, 4s, 8s backoff
+                print(f"  Batch failed (attempt {attempt + 1}/3): {e}")
+                if attempt < 2:
+                    print(f"  Retrying in {wait}s...")
+                    time.sleep(wait)
+
+        # Sleep between batches to stay under rate limits
+        if batch_start + BATCH_SIZE < len(valid_symbols):
+            time.sleep(2)
     
     # 1.5 Add manual prices for 401k mutual funds that yfinance can't fetch
     # These prices are from the actual brokerage account as of Nov 23, 2025
