@@ -385,3 +385,62 @@ h6 {
     font-size: clamp(1.5rem, 2vw, 2.25rem);
     white-space: nowrap;
 }
+
+/* Stat tiles (Allocation / Behavior / Overview benchmark) */
+.stat-tile {
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.stat-label {
+    color: var(--apple-gray);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.stat-value {
+    color: #fff;
+    font-size: clamp(1.5rem, 2vw, 2rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+}
+
+.stat-detail {
+    color: #c3c2b7;
+    font-size: 0.8rem;
+    line-height: 1.35;
+}
+
+/* Controls row: view tabs + account filter */
+.controls-row .view-tabs {
+    border-bottom: none;
+}
+
+.account-select {
+    min-width: 200px;
+}
+
+/* Time-range picker above the comparison chart */
+.range-picker .range-btn {
+    color: #c3c2b7;
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    font-weight: 500;
+    min-width: 42px;
+}
+
+.range-picker .range-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.range-picker .range-btn.active {
+    color: #fff;
+    background: rgba(57, 135, 229, 0.25);
+    border-color: #3987e5;
+}

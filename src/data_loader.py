@@ -327,8 +327,9 @@ def get_current_cash(df) -> float:
 def get_portfolio_history(df):
     """
     Reconstructs the portfolio holdings and value over time.
-    Note: Stock splits are already reflected in CSV transactions (e.g., DISTRIBUTION entries).
-    Yahoo Finance also returns split-adjusted prices, so no manual adjustment is needed.
+    Note: share counts are as recorded at the time (splits arrive as DISTRIBUTION
+    entries), so prices must not be split-adjusted; fetch_price_data undoes
+    Yahoo's split adjustment.
     """
     if df.empty:
         return pd.DataFrame(), []
@@ -417,9 +418,13 @@ def get_transaction_prices(df):
     
     return tx_prices
 
-def fetch_sector_data(symbols):
+def fetch_sector_data(symbols, retry_unknown=()):
     """
     Fetches sector information for the given symbols with caching.
+
+    Symbols cached as 'Unknown' are normally not re-fetched; those listed in
+    `retry_unknown` (e.g. current holdings) are, since 'Unknown' is also what a
+    failed download leaves behind.
     """
     # Ensure data directory exists
     os.makedirs('data', exist_ok=True)
@@ -437,7 +442,9 @@ def fetch_sector_data(symbols):
     # Identify missing symbols
     # Symbols already in cache (even if Unknown) should NOT be re-fetched every time
     # Also ignore 'nan' or empty strings
-    missing_symbols = [s for s in symbols if s and str(s).lower() != 'nan' and s not in cache]
+    retry = set(retry_unknown)
+    missing_symbols = [s for s in symbols if s and str(s).lower() != 'nan'
+                       and (s not in cache or (s in retry and cache[s] == 'Unknown'))]
     
     # Manual Mapping for ETFs and common symbols that yfinance fails on
     ETF_SECTORS = {
@@ -456,16 +463,20 @@ def fetch_sector_data(symbols):
         'FIG' : 'Technology', # Figma
         'FID GR CO POOL CL S': '401k - Growth',
         'VANG RUS 1000 GR TR': '401k - Growth',
+        'VOO': 'ETF - S&P 500',
+        'BTCI': 'ETF - Crypto',
+        'VCX': 'Fund - Private Companies',
+        BROKERAGELINK_PLACEHOLDER: 'Cash (Money Market)',
     }
     
-    # Pre-populate from manual mapping if missing
+    # Manual mapping wins over a missing or 'Unknown' cache entry
     for sym in symbols:
-        if sym in ETF_SECTORS and sym not in cache:
+        if sym in ETF_SECTORS and cache.get(sym, 'Unknown') == 'Unknown':
             cache[sym] = ETF_SECTORS[sym]
             updated = True
             
     # Re-check missing after manual mapping
-    missing_symbols = [s for s in missing_symbols if s not in cache]
+    missing_symbols = [s for s in missing_symbols if cache.get(s, 'Unknown') == 'Unknown']
     
     if not missing_symbols:
         # One-time cleanup: remove 'nan' if it exists in cache
@@ -531,6 +542,23 @@ def find_stale_price_symbols(market_data, symbols, today=None, max_age_days=MAX_
     return stale
 
 
+def unadjust_for_splits(prices, splits):
+    """Undo Yahoo's split adjustment so prices match the share counts recorded
+    at the time (Fidelity history is not split-adjusted; the split itself shows
+    up later as a DISTRIBUTION of extra shares).
+
+    A split of ratio r on day d multiplies every earlier price by r; the close on
+    d is already post-split. Returns a new frame.
+    """
+    out = prices.copy()
+    for sym in splits.columns.intersection(out.columns):
+        events = splits[sym].fillna(0)
+        events = events[events > 0]
+        for split_date, ratio in events.items():
+            out.loc[out.index < split_date, sym] *= ratio
+    return out
+
+
 def fetch_price_data(symbols, start_date, tx_df=None):
     """
     Fetches historical price data for the given symbols.
@@ -572,6 +600,7 @@ def fetch_price_data(symbols, start_date, tx_df=None):
     # 1. Fetch Market Data in batches to avoid Yahoo rate limits
     BATCH_SIZE = 20
     market_data = pd.DataFrame()
+    split_data = pd.DataFrame()
     for batch_start in range(0, len(valid_symbols), BATCH_SIZE):
         batch = valid_symbols[batch_start:batch_start + BATCH_SIZE]
         print(f"  Fetching price batch {batch_start // BATCH_SIZE + 1}"
@@ -580,13 +609,18 @@ def fetch_price_data(symbols, start_date, tx_df=None):
 
         for attempt in range(3):  # Retry up to 3 times per batch
             try:
-                batch_data = yf.download(batch, start=start_date, progress=False)['Close']
+                # auto_adjust=False: Close is split-adjusted only (not for
+                # dividends); splits are undone below using 'Stock Splits'.
+                raw = yf.download(batch, start=start_date, progress=False,
+                                  auto_adjust=False, actions=True)
+                batch_data = raw['Close']
+                batch_splits = raw['Stock Splits'] if 'Stock Splits' in raw else pd.DataFrame()
                 if isinstance(batch_data, pd.Series):
                     batch_data = batch_data.to_frame(name=batch[0])
-                if market_data.empty:
-                    market_data = batch_data
-                else:
-                    market_data = market_data.join(batch_data, how='outer')
+                if isinstance(batch_splits, pd.Series):
+                    batch_splits = batch_splits.to_frame(name=batch[0])
+                market_data = batch_data if market_data.empty else market_data.join(batch_data, how='outer')
+                split_data = batch_splits if split_data.empty else split_data.join(batch_splits, how='outer')
                 break  # Success — move to next batch
             except Exception as e:
                 wait = 2 ** (attempt + 1)  # 2s, 4s, 8s backoff
@@ -651,6 +685,8 @@ def fetch_price_data(symbols, start_date, tx_df=None):
                 yf_to_csv[yf_sym] = csv_sym
                 
         market_data = market_data.rename(columns=yf_to_csv)
+        if not split_data.empty:
+            market_data = unadjust_for_splits(market_data, split_data.rename(columns=yf_to_csv))
         combined_prices = market_data
         
     # Process Tx Prices (already has original symbols)
