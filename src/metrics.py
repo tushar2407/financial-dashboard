@@ -89,8 +89,9 @@ def get_daily_cash_flows(df):
     if df.empty:
         return pd.Series(dtype=float)
 
-    # Filter for Deposits, Withdrawals, 401k BUY contributions, and internal transfers
-    transfers = df[df['Category'].isin(['DEPOSIT', 'WITHDRAWAL', 'BUY', 'INTERNAL_TRANSFER'])].copy()
+    # Filter for Deposits, Withdrawals, retirement contributions, and internal transfers
+    transfers = df[df['Category'].isin(['DEPOSIT', 'WITHDRAWAL', 'CONTRIBUTION',
+                                        'INTERNAL_TRANSFER', 'PLAN_TRANSFER_OUT'])].copy()
     
     if transfers.empty:
         return pd.Series(dtype=float)
@@ -100,11 +101,10 @@ def get_daily_cash_flows(df):
     flows = []
     for _, row in transfers.iterrows():
         amount = 0
-        if row['Category'] == 'BUY':
-            # Retirement account BUYs are contributions (capital inflow)
-            if row.get('Account Type') == 'retirement':
-                amount = abs(row['Amount'])
-        elif row['Category'] == 'INTERNAL_TRANSFER':
+        if row['Category'] == 'CONTRIBUTION':
+            # Contributions are capital inflows
+            amount = abs(row['Amount'])
+        elif row['Category'] in ('INTERNAL_TRANSFER', 'PLAN_TRANSFER_OUT'):
             # Internal transfers are capital inflows/outflows for individual account views.
             # In combined views (where both sides are present), they net to $0.
             amount = row['Amount']
@@ -166,17 +166,14 @@ def calculate_net_invested_breakdown(df):
         )
     ]['Amount'].abs().sum()
     
-    # Retirement account contributions (BUY transactions in 401k/IRA/etc.)
-    contributions = df[
-        (df['Category'] == 'BUY') &
-        (df.get('Account Type', pd.Series(dtype=str)) == 'retirement')
-    ]['Amount'].abs().sum() if 'Account Type' in df.columns else 0
+    # Retirement plan contributions (e.g. 401k payroll deductions)
+    contributions = df[df['Category'] == 'CONTRIBUTION']['Amount'].abs().sum()
     
     # Withdrawals (including any negative DEPOSIT amounts if they exist)
     withdrawals = df[df['Category'] == 'WITHDRAWAL']['Amount'].sum()
 
     # Internal transfers between brokerage accounts
-    internal_transfers = df[df['Category'] == 'INTERNAL_TRANSFER']['Amount'].sum()
+    internal_transfers = df[df['Category'].isin(['INTERNAL_TRANSFER', 'PLAN_TRANSFER_OUT'])]['Amount'].sum()
     
     return {
         'transfers': transfers,
@@ -350,6 +347,27 @@ def calculate_yearly_returns(portfolio_series, daily_cash_flows):
         
     return yearly_metrics
 
+def _consume_lots_fifo(symbol_lots: list, qty: float) -> tuple[float, float]:
+    """Removes `qty` shares from the oldest lots first (mutates `symbol_lots`).
+
+    Returns (cost basis of the removed shares, shares actually removed).
+    """
+    remaining = qty
+    cost_basis = 0.0
+    removed = 0.0
+    while remaining > 0 and symbol_lots:
+        lot = symbol_lots[0]
+        take = min(lot['qty'], remaining)
+        cost_basis += take * lot['cost']
+        removed += take
+        remaining -= take
+        if lot['qty'] > take:
+            lot['qty'] -= take
+        else:
+            symbol_lots.pop(0)
+    return cost_basis, removed
+
+
 def calculate_cost_basis(df):
     """
     Calculates FIFO cost basis, realized P/L, and current holdings.
@@ -382,7 +400,7 @@ def calculate_cost_basis(df):
         if symbol not in lots:
             lots[symbol] = []
             
-        if action in ['BUY', 'REINVESTMENT']:
+        if action in ['BUY', 'CONTRIBUTION', 'REINVESTMENT']:
             # Add a new lot
             # Cost per share = abs(amount) / qty
             # Note: Amount is negative for buys.
@@ -407,25 +425,8 @@ def calculate_cost_basis(df):
             # Sell Price = 1525.96 / 19 = 80.31.
             sell_price = abs(amount / qty)
             
-            cost_basis = 0
-            shares_sold_so_far = 0
-            
-            while qty_to_sell > 0 and lots[symbol]:
-                current_lot = lots[symbol][0]
-                
-                if current_lot['qty'] > qty_to_sell:
-                    # Partial lot sale
-                    cost_basis += qty_to_sell * current_lot['cost']
-                    current_lot['qty'] -= qty_to_sell
-                    shares_sold_so_far += qty_to_sell
-                    qty_to_sell = 0
-                else:
-                    # Full lot sale
-                    cost_basis += current_lot['qty'] * current_lot['cost']
-                    shares_sold_so_far += current_lot['qty']
-                    qty_to_sell -= current_lot['qty']
-                    lots[symbol].pop(0)
-            
+            cost_basis, shares_sold_so_far = _consume_lots_fifo(lots[symbol], qty_to_sell)
+
             # Record Realized P/L
             # Proceeds = shares_sold_so_far * sell_price
             # P/L = Proceeds - Cost Basis
@@ -441,6 +442,10 @@ def calculate_cost_basis(df):
                 'Proceeds': proceeds,
                 'Realized P/L': pnl
             })
+
+        elif action == 'PLAN_TRANSFER_OUT':
+            # Money moved out of the plan at cost: not a sale, no realized P/L
+            _consume_lots_fifo(lots[symbol], abs(qty))
 
     # Construct Current Holdings from remaining lots
     current_holdings = []

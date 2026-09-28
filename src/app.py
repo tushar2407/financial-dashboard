@@ -130,6 +130,10 @@ def _build_account_tabs(meta: dict) -> list:
     if len(meta['brokerage_accounts']) >= 2:
         tabs.append(dbc.Tab(label='All Brokerage', tab_id='all_brokerage'))
 
+    # "All Retirement" aggregate tab if 2+ retirement accounts exist
+    if len(meta['retirement_accounts']) >= 2:
+        tabs.append(dbc.Tab(label='All Retirement', tab_id='all_retirement'))
+
     # "Combined" tab if there are both brokerage and retirement accounts
     if meta['brokerage_accounts'] and meta['retirement_accounts']:
         tabs.append(dbc.Tab(label='Combined', tab_id='combined'))
@@ -141,6 +145,8 @@ def _filter_df(account_tab: str):
     """Filter global_df based on the selected account tab."""
     if account_tab == 'all_brokerage':
         return global_df[global_df['Account'].isin(account_meta['brokerage_accounts'])].copy()
+    if account_tab == 'all_retirement':
+        return global_df[global_df['Account'].isin(account_meta['retirement_accounts'])].copy()
     if account_tab == 'combined':
         return global_df.copy()
 
