@@ -274,7 +274,7 @@ def update_dashboard(tab):
 
     return html.Div([
         dbc.Row([
-            dbc.Col(create_card("Current Value", f"${current_val:,.2f}", f"{pl_pct:+.2f}% All Time", "primary"), width=12, md=6, lg=3, className="mb-4"),
+            dbc.Col(create_card("Current Value", f"${current_val:,.2f}", f"{pl_pct:+.2f}% All Time", "primary"), width=12, md=6, xl=True, className="mb-4"),
             dbc.Col([
                 dbc.Card([
                     dbc.CardBody([
@@ -331,7 +331,7 @@ def update_dashboard(tab):
                         ])
                     ], className="p-3")
                 ], className="glass-card h-100")
-            ], width=12, md=6, lg=3, className="mb-4"),
+            ], width=12, md=6, xl=True, className="mb-4"),
             dbc.Col([
                 dbc.Card([
                     dbc.CardBody([
@@ -354,16 +354,16 @@ def update_dashboard(tab):
                         ])
                     ], className="p-3")
                 ], className="glass-card h-100")
-            ], width=12, md=6, lg=3, className="mb-4"),
+            ], width=12, md=6, xl=True, className="mb-4"),
             dbc.Col(
                 create_card("Personal Return (XIRR)", f"{cagr:.2f}%", f"{yoy_xirr:+.2f}% 1Y", "info", annotation="till date", info=xirr_info),
-                width=12, md=6, lg=3, className="mb-4"
+                width=12, md=6, xl=True, className="mb-4"
             ),
             dbc.Col(
                 create_card("Portfolio Return (TWR)", f"{lifetime_twr:.2f}%", f"{yoy_twr:+.2f}% 1Y", "success", annotation="till date", info=twr_info),
-                width=12, md=6, lg=3, className="mb-4"
+                width=12, md=6, xl=True, className="mb-4"
             ),
-        ]),
+        ], className="summary-row"),
         
         dbc.Row([
             dbc.Col([
