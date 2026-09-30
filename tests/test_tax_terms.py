@@ -89,6 +89,20 @@ def test_same_stock_in_two_accounts_is_combined():
     assert b['next_lt_date'] == pd.Timestamp('2027-09-02') and b['next_lt_shares'] == 1.0
 
 
+def test_cost_basis_matches_lots_within_each_account():
+    df = pd.DataFrame([
+        _tx('2025-01-02', 'BUY', -100.0, 'X', 10.0, account="Individual"),        # @10
+        _tx('2025-02-03', 'BUY', -400.0, 'X', 20.0, account="Individual 2026"),   # @20
+        _tx('2025-03-03', 'SELL', 250.0, 'X', -10.0, account="Individual 2026"),  # @25
+    ])
+    holdings, realized = calculate_cost_basis(df)
+    (sale,) = realized
+    assert sale['Realized P/L'] == 50.0          # vs. the @20 lot in its own account, not the @10 one
+    (x,) = holdings                              # merged back into one row per stock
+    assert x['Quantity'] == 20.0 and x['Total Cost'] == 300.0 and x['Avg Cost'] == 15.0
+    assert sorted(lot['cost'] for lot in x['Lots']) == [10.0, 20.0]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

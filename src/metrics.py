@@ -375,10 +375,35 @@ def _consume_lots_fifo(symbol_lots: list, qty: float) -> list:
 def calculate_cost_basis(df):
     """
     Calculates FIFO cost basis, realized P/L, and current holdings.
+
+    Lots are matched within each account (as Fidelity does), then holdings of
+    the same stock are merged into one row.
     Returns:
     - current_holdings: List of dicts
     - realized_pnl: List of dicts
     """
+    if df.empty or 'Account' not in df.columns or df['Account'].nunique() <= 1:
+        return _cost_basis_single_account(df)
+
+    merged, realized = {}, []
+    for _, acct_df in df.groupby('Account', sort=False):
+        holdings, acct_realized = _cost_basis_single_account(acct_df)
+        realized.extend(acct_realized)
+        for h in holdings:
+            m = merged.setdefault(h['Symbol'], {'Symbol': h['Symbol'], 'Quantity': 0.0,
+                                                'Total Cost': 0.0, 'Lots': []})
+            m['Quantity'] += h['Quantity']
+            m['Total Cost'] += h['Total Cost']
+            m['Lots'].extend(h['Lots'])
+    for m in merged.values():
+        m['Avg Cost'] = m['Total Cost'] / m['Quantity']
+        m['Lots'].sort(key=lambda lot: lot['date'])
+    realized.sort(key=lambda r: r['Date'])
+    return list(merged.values()), realized
+
+
+def _cost_basis_single_account(df):
+    """FIFO cost basis for transactions from one account."""
     if df.empty:
         return [], []
 
