@@ -16,7 +16,8 @@ from metrics import (calculate_dividend_income, calculate_net_invested, calculat
                      calculate_yearly_returns)
 from components import create_history_table
 from insights import (allocation_summary, compare_window, load_goals, monthly_deposits,
-                      realized_by_symbol, trading_summary, trades_per_month)
+                      realized_by_symbol, stock_profit_breakdown, trading_summary,
+                      trades_per_month)
 from charts import (allocation_treemap, growth_vs_benchmark, monthly_bars, realized_by_symbol_chart,
                     yearly_returns_chart)
 import views
@@ -258,6 +259,16 @@ def _allocation(df, categories):
     )
 
 
+def _profit_parts(df):
+    """(account type, enriched holdings, realized sales) per account, so lot
+    matching stays within each account like Fidelity's."""
+    parts = []
+    for _, acct_df in df.groupby('Account'):
+        holdings, realized = _enriched_holdings(acct_df)
+        parts.append((acct_df['Account Type'].iloc[0], holdings, realized))
+    return parts
+
+
 def _behavior(df):
     _, realized = calculate_cost_basis(df)
     return views.behavior_view(
@@ -266,6 +277,7 @@ def _behavior(df):
         monthly_bars(monthly_deposits(df), "New money added per month", "Added", money=True),
         realized_by_symbol_chart(realized_by_symbol(realized)),
         create_history_table(realized),
+        views.profit_by_stock_section(stock_profit_breakdown(_profit_parts(df))),
     )
 
 
