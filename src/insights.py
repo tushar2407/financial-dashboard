@@ -10,7 +10,7 @@ import os
 
 import pandas as pd
 
-from metrics import calculate_twr
+from metrics import calculate_twr, is_long_term
 
 GOALS_PATH = os.path.join('data', 'goals.json')
 DEFAULT_GOALS = {
@@ -224,3 +224,60 @@ def compare_window(portfolio_value: pd.Series, daily_flows: pd.Series,
         'benchmark_return': bench_return,
         'diff': float(pv.iloc[-1] - bench.iloc[-1]) if not bench.empty else None,
     }
+
+
+# ── profit by stock, split by tax term ────────────────────────────────────────
+
+PROFIT_COLUMNS = ['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt',
+                  'retirement', 'total', 'shares', 'next_lt_date', 'next_lt_shares']
+
+
+def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
+    """Realized and unrealized P/L per stock, split into short- and long-term.
+
+    `parts` is a list of (account_type, enriched holdings, realized sales), one
+    per account, so first-in-first-out lot matching stays within each account
+    (as Fidelity does). Retirement accounts are not taxed by holding period, so
+    their gains go to a single 'retirement' column. Unrealized shares are
+    classed by how long they have been held as of `today`; `next_lt_date` is
+    when the next short-term shares turn long-term.
+    """
+    today = pd.Timestamp(today or pd.Timestamp.now().normalize())
+    rows = {}
+
+    def row(symbol):
+        return rows.setdefault(symbol, {c: 0.0 for c in PROFIT_COLUMNS} |
+                               {'next_lt_date': pd.NaT, 'next_lt_shares': 0.0})
+
+    for account_type, holdings, realized in parts:
+        retirement = account_type == 'retirement'
+        for sale in realized:
+            r = row(sale['Symbol'])
+            if retirement:
+                r['retirement'] += sale['Realized P/L']
+            else:
+                r['realized_st'] += sale.get('Short-Term P/L', 0.0)
+                r['realized_lt'] += sale.get('Long-Term P/L', 0.0)
+        for h in holdings:
+            r = row(h['Symbol'])
+            r['shares'] += h['Quantity']
+            price = h.get('Current Price') or 0.0
+            for lot in h.get('Lots', []):
+                gain = lot['qty'] * (price - lot['cost']) if price else 0.0
+                if retirement:
+                    r['retirement'] += gain
+                elif is_long_term(lot['date'], today):
+                    r['unrealized_lt'] += gain
+                else:
+                    r['unrealized_st'] += gain
+                    turns_lt = lot['date'] + pd.DateOffset(years=1) + pd.Timedelta(days=1)
+                    if pd.isna(r['next_lt_date']) or turns_lt < r['next_lt_date']:
+                        r['next_lt_date'], r['next_lt_shares'] = turns_lt, lot['qty']
+                    elif turns_lt == r['next_lt_date']:
+                        r['next_lt_shares'] += lot['qty']
+
+    if not rows:
+        return pd.DataFrame(columns=PROFIT_COLUMNS)
+    df = pd.DataFrame.from_dict(rows, orient='index')[PROFIT_COLUMNS]
+    df['total'] = df[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt', 'retirement']].sum(axis=1)
+    return df.sort_values('total', ascending=False)

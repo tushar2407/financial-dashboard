@@ -444,3 +444,40 @@ h6 {
     background: rgba(57, 135, 229, 0.25);
     border-color: #3987e5;
 }
+
+/* Totals row pinned under a sortable glass table */
+.glass-table tfoot .totals-row td {
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    position: sticky;
+    bottom: 0;
+    background: #141414;
+}
+
+/* Scroll box whose table header stays visible while the rows scroll */
+.sticky-table-box {
+    max-height: 560px;
+    overflow: auto;
+    border-radius: 12px;
+}
+
+/* .glass-table clips with overflow: hidden, which disables sticky; the box clips instead */
+.sticky-table-box .glass-table {
+    overflow: visible !important;
+}
+
+.sticky-table-box .glass-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #1b1b1b !important;   /* opaque so rows don't show through */
+}
+
+.sticky-table-box .glass-table thead th:hover {
+    background: #222 !important;
+}
+
+.sticky-table-box .glass-table tfoot .totals-row td {
+    z-index: 2;
+    padding: 12px 15px;
+    font-size: 14px;
+}
