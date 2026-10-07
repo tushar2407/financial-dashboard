@@ -2,7 +2,6 @@
 
 A premium, automated investment tracking suite designed with an **Apple-style Glassmorphism aesthetic**. This dashboard provides deep insights into your portfolio performance across Individual, ESPP, and 401k accounts, featuring automated data ingestion and advanced financial metrics.
 
-![Dashboard Preview](assets/screenshot.png)
 
 ## 🚀 Key Features
 
