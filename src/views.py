@@ -136,7 +136,8 @@ def overview_view(summary: dict, yearly_chart, default_range: str = 'ALL'):
         dbc.Row([
             dbc.Col(html.Div([
                 html.Div(range_picker, className="d-flex justify-content-end mb-1"),
-                dcc.Loading(html.Div(id='compare-chart'), type='dot', color='#3987e5'),
+                dcc.Loading(html.Div(id='compare-chart'), type='dot', color='#3987e5',
+                            target_components={'compare-chart': 'children'}),
             ], className="glass-card p-3 h-100"), width=12, lg=9, className="mb-4"),
             dbc.Col(html.Div(id='compare-tile', className="h-100"), width=12, lg=3, className="mb-4"),
         ]),

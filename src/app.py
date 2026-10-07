@@ -175,7 +175,10 @@ app.layout = html.Div([
             ), width=12, md=4, lg=3),
         ], className="align-items-center controls-row mb-4"),
 
-        dcc.Loading(html.Div(id='view-content'), type='dot', color='#3987e5'),
+        # Spinner only when the whole view is rebuilt (tab/account change), not
+        # when a callback updates something inside it (search, filters, ranges)
+        dcc.Loading(html.Div(id='view-content'), type='dot', color='#3987e5',
+                    target_components={'view-content': 'children'}),
 
     ], fluid=False, className="pb-5")
 ], style={'overflowX': 'hidden'})
