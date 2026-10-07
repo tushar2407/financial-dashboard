@@ -4,7 +4,7 @@ import sys
 from functools import lru_cache
 
 import dash
-from dash import html, dcc, ctx, ALL
+from dash import html, ctx, ALL
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 import pandas as pd
@@ -14,7 +14,7 @@ from data_loader import (get_current_cash, load_and_clean_data, categorize_trans
 from metrics import (calculate_dividend_income, calculate_net_invested, calculate_cost_basis,
                      calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics,
                      calculate_yearly_returns)
-from components import create_history_table
+from components import create_history_table, empty_state
 from insights import (allocation_summary, compare_window, filter_realized, last_sales, load_goals,
                       monthly_deposits, realized_by_symbol, search_breakdown,
                       stock_profit_breakdown, trading_summary, trades_per_month,
@@ -22,7 +22,8 @@ from insights import (allocation_summary, compare_window, filter_realized, last_
 from charts import (allocation_treemap, growth_vs_benchmark, monthly_bars, realized_by_symbol_chart,
                     tax_years_chart, yearly_returns_chart)
 import views
-from fidelity_scraper import refresh_if_stale
+from fidelity_scraper import _last_fetch_time, refresh_if_stale
+from layout import PAGES, app_layout, page_for
 
 # ── category storage ──────────────────────────────────────────────────────────
 CATEGORIES_PATH = os.path.join('data', 'stock_categories.json')
@@ -101,7 +102,7 @@ app = dash.Dash(__name__,
                 assets_folder='../assets',
                 suppress_callback_exceptions=True)
 server = app.server
-app.title = "Financial Dashboard"
+app.title = "Portfolio"
 
 # ── Account filter helpers ────────────────────────────────────────────────────
 def _acct_tab_id(name: str) -> str:
@@ -140,48 +141,7 @@ def _filter_df(account_tab: str):
 
 _ACCOUNT_OPTIONS = _account_options(account_meta)
 
-app.layout = html.Div([
-    dcc.Store(id='categories-store', data=load_categories()),
-    dbc.Container([
-        html.Div([
-            html.H1("Financial Dashboard", className="text-center mb-2 text-white display-4",
-                    style={'fontWeight': '700', 'letterSpacing': '-0.04em'}),
-            html.P("Portfolio Analytics & Performance",
-                   className="text-center text-muted mb-0 lead",
-                   style={'fontWeight': '400', 'letterSpacing': '-0.02em'}),
-        ], className="dashboard-header mb-5"),
-
-        dbc.Alert(
-            [
-                html.Strong("Prices are out of date. "),
-                f"Market prices for {len(stale_held_symbols)} holding(s) could not be downloaded, "
-                f"so they are valued at their last trade price: {', '.join(stale_held_symbols)}. "
-                "Upgrade yfinance (pip install -U yfinance) or start the app with venv/bin/python.",
-            ],
-            color="warning", className="mb-4",
-        ) if stale_held_symbols else None,
-
-        # ── Controls: view tabs + account filter, in one row ──────────────────
-        dbc.Row([
-            dbc.Col(dbc.Tabs(id='view-tabs', active_tab='overview', children=[
-                dbc.Tab(label='Overview', tab_id='overview'),
-                dbc.Tab(label='Allocation', tab_id='allocation'),
-                dbc.Tab(label='Behavior', tab_id='behavior'),
-            ], className='view-tabs'), width=12, md=True, className="mb-3 mb-md-0"),
-            dbc.Col(dcc.Dropdown(
-                id='account-select', options=_ACCOUNT_OPTIONS,
-                value=_ACCOUNT_OPTIONS[0]['value'] if _ACCOUNT_OPTIONS else 'combined',
-                clearable=False, searchable=False, className='account-select',
-            ), width=12, md=4, lg=3),
-        ], className="align-items-center controls-row mb-4"),
-
-        # Spinner only when the whole view is rebuilt (tab/account change), not
-        # when a callback updates something inside it (search, filters, ranges)
-        dcc.Loading(html.Div(id='view-content'), type='dot', color='#3987e5',
-                    target_components={'view-content': 'children'}),
-
-    ], fluid=False, className="pb-5")
-], style={'overflowX': 'hidden'})
+app.layout = app_layout(_ACCOUNT_OPTIONS, load_categories(), _last_fetch_time(), stale_held_symbols)
 
 
 # ── View builders ─────────────────────────────────────────────────────────────
@@ -282,18 +242,21 @@ def _behavior_data(account: str):
     return realized, stock_profit_breakdown(_profit_parts(df))
 
 
-def _behavior(df, account):
-    realized, breakdown = _behavior_data(account)
-    tax_summary = yearly_tax_summary(df, realized)
-    return views.behavior_view(
+def _activity(df, account):
+    realized, _ = _behavior_data(account)
+    return views.activity_view(
         trading_summary(df, realized),
         monthly_bars(trades_per_month(df), "Trades per month", "Trades"),
         monthly_bars(monthly_deposits(df), "New money added per month", "Added", money=True),
         realized_by_symbol_chart(realized_by_symbol(realized)),
-        views.tax_year_section(tax_summary, tax_years_chart(tax_summary)),
-        views.profit_by_stock_section(breakdown),
-        views.closed_trades_section(sorted({r['Date'].year for r in realized})),
+        sorted({r['Date'].year for r in realized}),
     )
+
+
+def _taxes(df, account):
+    realized, breakdown = _behavior_data(account)
+    summary = yearly_tax_summary(df, realized)
+    return views.taxes_view(summary, tax_years_chart(summary), breakdown)
 
 
 @app.callback(
@@ -320,19 +283,24 @@ def update_closed_trades(year, query, account):
 
 @app.callback(
     Output('view-content', 'children'),
-    Input('view-tabs', 'active_tab'),
+    Output('page-title', 'children'),
+    Input('url', 'pathname'),
     Input('account-select', 'value'),
     Input('categories-store', 'data'),
 )
-def render_view(view, account, categories_data):
+def render_view(pathname, account, categories_data):
+    page = page_for(pathname)
+    title = PAGES[page][0]
     df = _filter_df(account)
     if df.empty:
-        return html.H3("No Data Available", className="text-center text-muted mt-5")
-    if view == 'allocation':
-        return _allocation(df, categories_data or {})
-    if view == 'behavior':
-        return _behavior(df, account)
-    return _overview(df, account)
+        return empty_state("No data for this account."), title
+    if page == '/allocation':
+        return _allocation(df, categories_data or {}), title
+    if page == '/activity':
+        return _activity(df, account), title
+    if page == '/taxes':
+        return _taxes(df, account), title
+    return _overview(df, account), title
 
 
 @app.callback(

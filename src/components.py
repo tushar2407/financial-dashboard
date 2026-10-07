@@ -1,9 +1,17 @@
-import re
+"""Shared UI building blocks: panels, KPI cells, data tables.
 
+Styling lives in assets/style.css; nothing here sets inline colors. Numbers go
+through formatting.py so every amount reads the same way.
+"""
 from dash import html
 import dash_bootstrap_components as dbc
 
-def create_info_icon(target_id, info):
+from formatting import date, money, pct, shares, sign_class
+
+
+# ── primitives ────────────────────────────────────────────────────────────────
+
+def info_icon(target_id: str, info):
     """Small circled 'i' that shows `info` (text or components) on hover."""
     return html.Span([
         html.Span("i", id=target_id, className="info-icon", tabIndex=0),
@@ -11,31 +19,77 @@ def create_info_icon(target_id, info):
     ])
 
 
-def create_card(title, value, subtitle=None, color="primary", annotation=None, info=None):
-    # Map custom colors to Bootstrap colors if needed, or use style argument
-    # Bootstrap colors: primary, secondary, success, danger, warning, info, light, dark
-    
-    # Adjust subtitle color based on context
-    subtitle_color = "text-success" if "success" in color else "text-danger" if "danger" in color else "text-muted"
-    if subtitle and ("+" in subtitle or "All Time" in subtitle):
-        subtitle_color = "text-success" if "+" in subtitle or float(subtitle.split('%')[0].replace(',','')) >= 0 else "text-danger"
-    
-    card_id = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-') + "-card"
-    return dbc.Card(
-        dbc.CardBody([
-            html.H6([
-                title,
-                create_info_icon(f"{card_id}-info", info) if info else None,
-            ], className="card-subtitle mb-2 text-muted text-uppercase small font-weight-bold"),
-            html.Div([
-                html.H2(value, className="card-title text-white mb-1", style={'display': 'inline-block'}),
-                html.Span(f" {annotation}", className="text-muted small", style={'marginLeft': '8px', 'fontSize': '14px'}) if annotation else None
-            ]),
-            html.P(subtitle, className=f"card-text {subtitle_color} small mb-0") if subtitle else None
-        ], className="p-3"),
-        className="glass-card h-100",
-        id=card_id
-    )
+def panel(title, body, actions=None, info=None, subtitle=None, panel_id=None, flush=False):
+    """Bordered panel; the header row holds the title and the panel's controls."""
+    slug = panel_id or str(title).lower().replace(' ', '-')
+    head = html.Div([
+        html.Div([title,
+                  info_icon(f"{slug}-info", info) if info else None,
+                  html.Span(subtitle, className="panel-sub") if subtitle else None],
+                 className="panel-title"),
+        html.Div(actions, className="panel-actions") if actions is not None else None,
+    ], className="panel-head")
+    ids = {'id': panel_id} if panel_id else {}
+    return html.Div([head, html.Div(body, className="panel-body flush" if flush else "panel-body")],
+                    className="panel", **ids)
+
+
+def empty_state(text: str):
+    return html.Div(text, className="empty-state")
+
+
+# ── KPIs ──────────────────────────────────────────────────────────────────────
+
+def kpi(label: str, value: str, sub=None, value_class: str = "", sub_class: str = "",
+        info=None, kpi_id: str = None, rows=None):
+    """One KPI cell. `rows` is an optional breakdown: [(label, text, css class)]."""
+    kpi_id = kpi_id or label.lower().replace(' ', '-').replace('·', '').replace('%', 'pct')
+    return html.Div([
+        html.Div([label, info_icon(f"{kpi_id}-info", info) if info else None], className="kpi-label"),
+        html.Div(value, className=f"kpi-value {value_class}".strip()),
+        html.Div(sub, className=f"kpi-sub {sub_class}".strip()) if sub else None,
+        html.Div([html.Div([html.Span(lbl), html.Span(txt, className=cls)], className="kpi-row")
+                  for lbl, txt, cls in rows], className="kpi-rows") if rows else None,
+    ], className="kpi", id=kpi_id)
+
+
+def kpi_strip(cells: list):
+    """KPIs joined into one bordered strip with dividers."""
+    return html.Div(cells, className="kpi-strip")
+
+
+# ── tables ────────────────────────────────────────────────────────────────────
+
+def th(label: str, numeric: bool = False):
+    return html.Th(label, className="num" if numeric else None)
+
+
+def td(content, numeric: bool = False, cls: str = ""):
+    classes = " ".join(c for c in ("num" if numeric else "", cls) if c)
+    return html.Td(content, className=classes or None)
+
+
+def pl_td(v: float, cents: bool = False, strong: bool = False):
+    """P/L cell: signed, colored by sign, em dash for zero."""
+    return td(money(v, signed=True, cents=cents), numeric=True,
+              cls=f"{sign_class(v)}{' strong' if strong else ''}")
+
+
+def two_line(main, sub):
+    return [main, html.Span(sub, className="sub")] if sub else main
+
+
+def data_table(columns: list, rows: list, footer=None, table_id=None, auto_height=False):
+    """`columns` is [(label, numeric?)]; rows are html.Tr. Sortable via table_sort.js."""
+    table = dbc.Table([
+        html.Thead(html.Tr([th(label, numeric) for label, numeric in columns])),
+        html.Tbody(rows),
+        html.Tfoot(footer) if footer is not None else None,
+    ], className="data-table", hover=True, borderless=True, **({'id': table_id} if table_id else {}))
+    return html.Div(table, className="table-box auto-height" if auto_height else "table-box")
+
+
+# ── closed trades ─────────────────────────────────────────────────────────────
 
 def _term_label(sale) -> str:
     """Short / Long / Mixed by the lots a sale used; retirement sales have no term."""
@@ -50,7 +104,7 @@ def _term_label(sale) -> str:
 def create_history_table(history_data):
     """Closed trades, newest first, with each sale's tax term and a total line."""
     if not history_data:
-        return html.Div("No closed trades match.", className="text-muted")
+        return empty_state("No closed trades match.")
 
     rows_data = sorted(history_data, key=lambda r: r['Date'], reverse=True)
     taxable = [r for r in rows_data if r.get('Account Type') != 'retirement']
@@ -58,135 +112,83 @@ def create_history_table(history_data):
     st = sum(r.get('Short-Term P/L', 0.0) for r in taxable)
     lt = sum(r.get('Long-Term P/L', 0.0) for r in taxable)
 
-    def money(v):
-        return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
+    columns = [("Date", False), ("Symbol", False), ("Term", False), ("Qty", True),
+               ("Price", True), ("Cost", True), ("Proceeds", True), ("Realized P/L", True)]
+    rows = [html.Tr([
+        td(date(r['Date'])),
+        td(r['Symbol'], cls="sym"),
+        td(_term_label(r), cls="muted"),
+        td(shares(r['Qty']), numeric=True),
+        td(money(r['Sell Price'], cents=True), numeric=True),
+        td(money(r['Cost Basis'], cents=True), numeric=True),
+        td(money(r['Proceeds'], cents=True), numeric=True),
+        pl_td(r['Realized P/L'], cents=True),
+    ]) for r in rows_data]
 
-    header = html.Thead(html.Tr([html.Th(c, style={'textAlign': a}) for c, a in (
-        ("Date", 'left'), ("Symbol", 'left'), ("Term", 'left'), ("Qty", 'right'),
-        ("Price", 'right'), ("Cost", 'right'), ("Proceeds", 'right'), ("Realized P/L", 'right'))]))
-    rows = []
-    for r in rows_data:
-        pl = r['Realized P/L']
-        rows.append(html.Tr([
-            html.Td(f"{r['Date']:%Y-%m-%d}", style={'textAlign': 'left'}),
-            html.Td(r['Symbol'], style={'textAlign': 'left', 'fontWeight': '600'}),
-            html.Td(_term_label(r), style={'textAlign': 'left', 'color': '#c3c2b7'}),
-            html.Td(f"{r['Qty']:,.2f}", style={'textAlign': 'right'}),
-            html.Td(f"${r['Sell Price']:,.2f}", style={'textAlign': 'right'}),
-            html.Td(f"${r['Cost Basis']:,.2f}", style={'textAlign': 'right'}),
-            html.Td(f"${r['Proceeds']:,.2f}", style={'textAlign': 'right'}),
-            html.Td(money(pl), style={'textAlign': 'right', 'fontWeight': '600',
-                                      'color': "var(--apple-green)" if pl >= 0 else "var(--apple-red)"}),
-        ]))
-
-    return html.Div([
-        html.Div([
-            html.Span(f"Realized P/L: {money(total)}",
-                      className=f"me-3 {'text-success' if total >= 0 else 'text-danger'}",
-                      style={'fontWeight': '700', 'fontSize': '1.15rem'}),
-            html.Span(f"short-term {money(st)} · long-term {money(lt)} · {len(rows_data)} sales",
-                      className="text-muted small"),
-        ], className="mb-3"),
-        html.Div(dbc.Table([header, html.Tbody(rows)], id="history-table",
-                           className="glass-table mb-0", hover=True, borderless=True),
-                 className="sticky-table-box"),
-    ])
+    summary = html.Div([
+        html.Span(["Realized ", html.Span(money(total, signed=True, cents=True),
+                                          className=f"lead-num {sign_class(total)}")]),
+        html.Span(f"Short-term {money(st, signed=True, cents=True)}"),
+        html.Span(f"Long-term {money(lt, signed=True, cents=True)}"),
+        html.Span(f"{len(rows_data)} sales"),
+    ], className="table-summary")
+    return html.Div([summary, data_table(columns, rows, table_id="history-table")])
 
 
-def create_category_accordion_item(
-    name: str,
-    holdings_in_category: list,
-    total_portfolio_value: float,
-    deletable: bool = True,
-    cash: float = 0.0,
-) -> 'dbc.AccordionItem':
+# ── holdings by category ──────────────────────────────────────────────────────
+
+def create_category_accordion_item(name: str, holdings_in_category: list, total_portfolio_value: float,
+                                   deletable: bool = True, cash: float = 0.0) -> dbc.AccordionItem:
     show_cash = abs(cash) >= 0.01
     total_pl = sum(h.get('Unrealized P/L', 0) for h in holdings_in_category)
     total_cost = sum(h.get('Total Cost', 0) for h in holdings_in_category)
     total_value = sum(h.get('Market Value', 0) for h in holdings_in_category) + cash
     total_pl_pct = (total_pl / total_cost) if total_cost else 0
-    pl_color = "var(--apple-green)" if total_pl >= 0 else "var(--apple-red)"
 
     title = html.Div([
-        html.Span(name, style={'fontWeight': '600', 'fontSize': '1rem', 'color': 'white'}),
-        html.Div([
-            html.Span(f"${total_value:,.2f}",
-                      style={'color': 'rgba(255,255,255,0.6)', 'fontWeight': '500',
-                             'fontSize': '0.9rem', 'marginRight': '16px'}),
-            html.Span(f"${total_pl:+,.2f}",
-                      style={'color': pl_color, 'fontWeight': '700'}),
-            html.Span(f" ({total_pl_pct:+.2%})",
-                      style={'color': pl_color, 'fontWeight': '500', 'fontSize': '0.88rem',
-                             'marginRight': '2rem'}),
-        ], className="d-flex align-items-center"),
-    ], className="d-flex justify-content-between align-items-center w-100")
+        html.Span(name, className="name"),
+        html.Span([
+            html.Span(money(total_value, cents=True), className="text-2"),
+            html.Span(money(total_pl, signed=True, cents=True), className=sign_class(total_pl)),
+            html.Span(pct(total_pl_pct, digits=2), className=sign_class(total_pl)),
+        ], className="figures"),
+    ], className="accordion-title")
 
     if holdings_in_category or show_cash:
-        header_row = html.Thead(html.Tr([
-            html.Th("Symbol", style={'textAlign': 'left'}),
-            html.Th("Qty", style={'textAlign': 'right'}),
-            html.Th("Avg Cost", style={'textAlign': 'right'}),
-            html.Th("Price", style={'textAlign': 'right'}),
-            html.Th("Value", style={'textAlign': 'right'}),
-            html.Th("Portfolio %", style={'textAlign': 'right'}),
-            html.Th("P/L", style={'textAlign': 'right'}),
-            html.Th("P/L %", style={'textAlign': 'right'}),
-        ]))
+        columns = [("Symbol", False), ("Qty", True), ("Avg cost", True), ("Price", True),
+                   ("Value", True), ("Weight", True), ("P/L", True), ("P/L %", True)]
         rows = []
-        for h in holdings_in_category:
-            h_pl = h.get('Unrealized P/L', 0)
-            h_pct = h.get('P/L %', 0)
-            h_val = h.get('Market Value', 0)
-            port_pct = (h_val / total_portfolio_value) if total_portfolio_value else 0
-            c = "var(--apple-green)" if h_pl >= 0 else "var(--apple-red)"
+        for h in sorted(holdings_in_category, key=lambda h: -h.get('Market Value', 0)):
+            value = h.get('Market Value', 0)
+            pl = h.get('Unrealized P/L', 0)
             rows.append(html.Tr([
-                html.Td(h['Symbol'], style={'textAlign': 'left', 'fontWeight': '600'}),
-                html.Td(f"{h['Quantity']:,.2f}", style={'textAlign': 'right'}),
-                html.Td(f"${h.get('Avg Cost', 0):,.2f}", style={'textAlign': 'right'}),
-                html.Td(f"${h.get('Current Price', 0):,.2f}", style={'textAlign': 'right'}),
-                html.Td(f"${h_val:,.2f}", style={'textAlign': 'right'}),
-                html.Td(f"{port_pct:.1%}",
-                        style={'textAlign': 'right', 'color': 'rgba(255,255,255,0.7)'}),
-                html.Td(f"${h_pl:+,.2f}",
-                        style={'textAlign': 'right', 'color': c, 'fontWeight': '600'}),
-                html.Td(f"{h_pct:+.2%}",
-                        style={'textAlign': 'right', 'color': c, 'fontWeight': '600'}),
+                td(h['Symbol'], cls="sym"),
+                td(shares(h['Quantity']), numeric=True),
+                td(money(h.get('Avg Cost', 0), cents=True), numeric=True),
+                td(money(h.get('Current Price', 0), cents=True), numeric=True),
+                td(money(value, cents=True), numeric=True),
+                td(pct(value / total_portfolio_value if total_portfolio_value else 0, signed=False),
+                   numeric=True, cls="text-2"),
+                pl_td(pl, cents=True),
+                td(pct(h.get('P/L %', 0), digits=2) if sign_class(pl) != 'zero' else "—",
+                   numeric=True, cls=sign_class(pl)),
             ]))
         if show_cash:
-            cash_pct = (cash / total_portfolio_value) if total_portfolio_value else 0
-            muted = {'textAlign': 'right', 'color': 'rgba(255,255,255,0.4)'}
             rows.append(html.Tr([
-                html.Td("Cash", style={'textAlign': 'left', 'fontWeight': '600'}),
-                html.Td("—", style=muted),
-                html.Td("—", style=muted),
-                html.Td("—", style=muted),
-                html.Td(f"${cash:,.2f}", style={'textAlign': 'right'}),
-                html.Td(f"{cash_pct:.1%}",
-                        style={'textAlign': 'right', 'color': 'rgba(255,255,255,0.7)'}),
-                html.Td("—", style=muted),
-                html.Td("—", style=muted),
+                td("Cash", cls="sym"), td("—", True, "muted"), td("—", True, "muted"), td("—", True, "muted"),
+                td(money(cash, cents=True), numeric=True),
+                td(pct(cash / total_portfolio_value if total_portfolio_value else 0, signed=False),
+                   numeric=True, cls="text-2"),
+                td("—", True, "muted"), td("—", True, "muted"),
             ]))
-        body_content = html.Div([
-            dbc.Table(
-                [header_row, html.Tbody(rows)],
-                className="glass-table mb-0",
-                responsive=True, hover=True, borderless=True, size="sm",
-            )
-        ], className="table-responsive")
+        body = data_table(columns, rows, auto_height=True)
     else:
-        body_content = html.P(
-            "None of these stocks are held in the selected account.",
-            className="text-muted small mb-0"
-        )
+        body = empty_state("None of these stocks are held in this view.")
 
     footer = html.Div(
         dbc.Button("Delete category", id={'type': 'delete-category-btn', 'index': name},
-                   size="sm", color="danger", outline=True, n_clicks=0, className="mt-3"),
-        className="text-end"
+                   size="sm", color="danger", outline=True, n_clicks=0),
+        className="accordion-footer",
     ) if deletable else None
 
-    return dbc.AccordionItem(
-        children=html.Div([body_content, footer] if footer else [body_content]),
-        title=title,
-        item_id=name,
-    )
+    return dbc.AccordionItem(children=html.Div([body, footer]), title=title, item_id=name)
