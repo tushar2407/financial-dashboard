@@ -10,7 +10,7 @@ import os
 
 import pandas as pd
 
-from metrics import calculate_twr, is_long_term
+from metrics import align_flows, calculate_twr, is_long_term
 
 GOALS_PATH = os.path.join('data', 'goals.json')
 DEFAULT_GOALS = {
@@ -209,8 +209,7 @@ def compare_window(portfolio_value: pd.Series, daily_flows: pd.Series,
         bench = (shares * daily_prices).reindex(pv.index)
         bench_return = float(daily_prices.iloc[-1] / daily_prices.iloc[0] - 1)
 
-    invested = (start_value + flows.groupby(flows.index.normalize()).sum()
-                .reindex(pv.index, fill_value=0.0).cumsum())
+    invested = start_value + align_flows(flows, pv.index).cumsum()
     twr = calculate_twr(pv, flows if range_key == 'ALL' else daily_flows[daily_flows.index > start])
     return {
         'range': range_key,

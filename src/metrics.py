@@ -3,6 +3,21 @@ import numpy as np
 from scipy import optimize
 from datetime import datetime
 
+def align_flows(daily_cash_flows, index):
+    """Cash flows re-dated onto `index` (the dates the portfolio is valued).
+
+    A flow on a date with no valuation (weekend, market holiday) counts on the
+    next valued date, the first value that includes it; flows after the last
+    valued date count on the last one. Without this, reindexing silently drops
+    those flows and the deposit looks like investment return.
+    """
+    if daily_cash_flows.empty or len(index) == 0:
+        return pd.Series(0.0, index=index)
+    positions = index.searchsorted(pd.DatetimeIndex(daily_cash_flows.index)).clip(max=len(index) - 1)
+    aligned = pd.Series(daily_cash_flows.values, index=index[positions])
+    return aligned.groupby(level=0).sum().reindex(index, fill_value=0.0)
+
+
 def calculate_twr(portfolio_series, daily_cash_flows):
     """
     Calculate the Time-Weighted Return (TWR).
@@ -18,8 +33,7 @@ def calculate_twr(portfolio_series, daily_cash_flows):
     if len(p_series) < 2:
         return None
         
-    # Reindex flows to match portfolio dates
-    flows = daily_cash_flows.reindex(p_series.index, fill_value=0.0)
+    flows = align_flows(daily_cash_flows[daily_cash_flows.index >= first_idx], p_series.index)
     
     # Previous day's value
     prev_val = p_series.shift(1)
