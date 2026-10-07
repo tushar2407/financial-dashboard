@@ -5,5 +5,7 @@ venv/
 .env
 .DS_Store
 *.pyc
-data/
+# Personal data stays local; only the synthetic demo data is tracked
+data/*
+!data/demo/
 .fidelity_session/

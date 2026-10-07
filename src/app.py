@@ -25,8 +25,12 @@ import views
 from fidelity_scraper import _last_fetch_time, refresh_if_stale
 from layout import PAGES, app_layout, page_for
 
-# ── category storage ──────────────────────────────────────────────────────────
-CATEGORIES_PATH = os.path.join('data', 'stock_categories.json')
+# ── data location ─────────────────────────────────────────────────────────────
+# --demo runs on synthetic data in data/demo (see scripts/make_demo_data.py) and
+# never touches your Fidelity data or session.
+DEMO = '--demo' in sys.argv
+DATA_DIR = os.path.join('data', 'demo') if DEMO else 'data'
+CATEGORIES_PATH = os.path.join(DATA_DIR, 'stock_categories.json')
 
 
 def load_categories() -> dict:
@@ -65,13 +69,13 @@ def _enrich_holdings(holdings_data: list, prices) -> list:
 # the first process: Dash's debug reloader re-runs this module in a child
 # process with WERKZEUG_RUN_MAIN=true, which then loads the freshly fetched data.
 _IS_SERVER_START = __name__ == '__main__' and os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
-if _IS_SERVER_START and '--no-fetch' not in sys.argv:
+if _IS_SERVER_START and not DEMO and '--no-fetch' not in sys.argv:
     refresh_if_stale()
 
 
 # ── Load Data Globally (to avoid reloading on every callback) ─────────────────
 print("Loading data...")
-global_df = load_and_clean_data()
+global_df = load_and_clean_data(os.path.join(DATA_DIR, 'Accounts_History*.csv'))
 global_df = categorize_transactions(global_df)
 
 # Discover accounts and tag types
@@ -80,7 +84,7 @@ global_df = tag_account_types(global_df, account_meta)
 print(f"Discovered {len(account_meta['accounts'])} accounts: "
       f"{[a['name'] for a in account_meta['accounts']]}")
 
-goals = load_goals()
+goals = load_goals(os.path.join(DATA_DIR, 'goals.json'))
 BENCHMARK = goals['benchmark']
 
 # Fetch prices for all symbols (plus the benchmark) once
@@ -141,7 +145,8 @@ def _filter_df(account_tab: str):
 
 _ACCOUNT_OPTIONS = _account_options(account_meta)
 
-app.layout = app_layout(_ACCOUNT_OPTIONS, load_categories(), _last_fetch_time(), stale_held_symbols)
+app.layout = app_layout(_ACCOUNT_OPTIONS, load_categories(), None if DEMO else _last_fetch_time(),
+                        stale_held_symbols, demo=DEMO)
 
 
 # ── View builders ─────────────────────────────────────────────────────────────

@@ -27,7 +27,7 @@ def _nav_links(class_name: str):
     ], vertical=class_name == "side-nav", className=class_name)
 
 
-def _sidebar(last_fetch, stale_symbols: list):
+def _sidebar(last_fetch, stale_symbols: list, demo: bool):
     status = (html.Div([html.Span(className="status-dot warn"),
                         html.Span(f"{len(stale_symbols)} prices out of date", className="footer-text")])
               if stale_symbols else
@@ -38,9 +38,10 @@ def _sidebar(last_fetch, stale_symbols: list):
         _nav_links("side-nav"),
         html.Div([
             status,
-            html.Div(f"Data as of {date(last_fetch)}" if last_fetch else "No data fetched yet",
+            html.Div("Demo data (synthetic accounts)" if demo else
+                     f"Data as of {date(last_fetch)}" if last_fetch else "No data fetched yet",
                      className="footer-text"),
-            html.Div("Restart the app to fetch new data", className="footer-text"),
+            None if demo else html.Div("Restart the app to fetch new data", className="footer-text"),
         ], className="sidebar-footer"),
     ], className="sidebar")
 
@@ -55,7 +56,8 @@ def _stale_notice(stale_symbols: list):
     ], className="notice")
 
 
-def app_layout(account_options: list, categories: dict, last_fetch, stale_symbols: list):
+def app_layout(account_options: list, categories: dict, last_fetch, stale_symbols: list,
+               demo: bool = False):
     account_select = dcc.Dropdown(
         id='account-select', options=account_options,
         value=account_options[0]['value'] if account_options else 'combined',
@@ -64,7 +66,7 @@ def app_layout(account_options: list, categories: dict, last_fetch, stale_symbol
     return html.Div([
         dcc.Location(id='url'),
         dcc.Store(id='categories-store', data=categories),
-        _sidebar(last_fetch, stale_symbols),
+        _sidebar(last_fetch, stale_symbols, demo),
         html.Main([
             html.Header([html.H1(id='page-title', className="page-title"), account_select],
                         className="topbar"),

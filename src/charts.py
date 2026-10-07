@@ -78,18 +78,25 @@ def growth_vs_benchmark(window: dict, benchmark_name: str) -> dcc.Graph:
     ]
     short = len(portfolio) <= 8     # 1D / 5D: show the individual closes
     fig = go.Figure()
-    for name, s, color, dash, width in series:
-        if s is None or s.empty:
-            continue
+    shown = [(n, s, c, d, w) for n, s, c, d, w in series if s is not None and not s.empty]
+    for name, s, color, dash, width in shown:
         fig.add_trace(go.Scatter(
             x=s.index, y=s.values, name=name, mode='lines+markers' if short else 'lines',
             line=dict(color=color, width=width, dash=dash), marker=dict(size=8),
             hovertemplate=f'{name}: $%{{y:,.0f}}<extra></extra>',
         ))
-        # Direct label at the line end so identity is not color-alone
-        fig.add_annotation(x=s.index[-1], y=s.values[-1], text=f"${s.values[-1]:,.0f}",
-                           showarrow=False, xanchor='left', xshift=8,
-                           font=dict(color=TEXT_PRIMARY, size=12))
+    # Direct labels at the line ends (identity is not color-alone), spread apart
+    # vertically when the end values are too close to read
+    ends = sorted(((s.values[-1], s.index[-1], color) for _, s, color, _, _ in shown), reverse=True)
+    span = (max(v for v, _, _ in ends) - min(min(s.min() for _, s, _, _, _ in shown), 0)) or 1
+    shifts, last = [], None
+    for value, _, _ in ends:
+        shift = 0 if last is None else min(0, last[1] - 16 + (last[0] - value) / span * 360)
+        shifts.append(shift)
+        last = (value, shift)
+    for (value, x, _), shift in zip(ends, shifts):
+        fig.add_annotation(x=x, y=value, text=money(value), showarrow=False, xanchor='left',
+                           xshift=8, yshift=shift, font=dict(color=TEXT_PRIMARY, size=12))
 
     fig.update_layout(**_base_layout(
         title, height=400, hovermode='x unified',

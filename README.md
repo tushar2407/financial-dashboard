@@ -1,71 +1,115 @@
-# 💎 Glassmorphism Financial Dashboard
+# Portfolio
 
-A premium, automated investment tracking suite designed with an **Apple-style Glassmorphism aesthetic**. This dashboard provides deep insights into your portfolio performance across Individual, ESPP, and 401k accounts, featuring automated data ingestion and advanced financial metrics.
+A self-hosted dashboard for Fidelity accounts. It downloads your transaction
+history, rebuilds every position from it, and shows performance, allocation,
+trading activity and tax figures in one place. Everything runs locally; your
+data never leaves your machine.
 
+![Portfolio overview (demo data)](assets/screenshot.png)
 
-## 🚀 Key Features
+*Screenshot uses the bundled synthetic demo data.*
 
-### 1. Automated Fidelity Scraper 🤖
-- **Zero Manual Effort**: Uses **Playwright** to automatically log in to Fidelity and download the latest transaction history.
-- **Smart Sync**: Dynamically detects the last download date to only fetch missing data, ensuring a continuous and accurate timeline.
-- **Robust Parsing**: Handles complex CSV formats, including Microsoft ESPP credits and 401k contribution structures.
+## What it shows
 
-### 2. Advanced Analytics & Metrics 📈
-- **Personal Return (XIRR)**: Calculates the true internal rate of return, accounting for the timing of all cash flows.
-- **Portfolio Return (TWR)**: Time-Weighted Return to isolate investment performance from the effects of cash inflows/outflows.
-- **P/L Insight**: Tracks both **Realized P/L** (from sales) and **Unrealized P/L** (current market values).
-- **Segmentation**: Deep dive into Individual + ESPP, 401k, or a Combined view of your entire net worth.
+**Overview**
+- Portfolio value, net invested and total P&L, split into realized,
+  unrealized and dividends
+- Personal return (XIRR) and portfolio return (TWR)
+- Your portfolio against the same deposits invested in a benchmark (VOO by
+  default), over 1D, 5D, 1M, 6M, 1Y, 5Y or all time
+- Returns by calendar year
 
-### 3. Apple-Style Design System ✨
-- **Glassmorphism**: Semi-transparent cards with `backdrop-filter` blur, thin borders, and abstract gradient backgrounds.
-- **Premium Typography**: Built with the **Inter** typeface for maximum readability and a high-end feel.
-- **Responsive Layout**: Designed for a clean, centered experience that scales beautifully.
-- **Sleek Tables**: Replaced standard grid lines with modern Bootstrap-based glass tables and scrollable history views.
+**Allocation**
+- Cash against your target, concentration in the top five positions, and
+  positions under 1%
+- A sector map of your holdings
+- Holdings table with your own categories
 
-### 4. Allocation & Industry Deep Dives Sector
-- **Live Market Data**: Integrated with **yfinance** to fetch real-time sector and industry data.
-- **Visual Allocation**: Interactive pie charts showing your exposure by stock and industry, with automatic "Other" grouping for small positions.
+**Activity**
+- Trades per month, new money per month, share of sales at a profit, and
+  median holding period
+- Biggest realized gains and losses by stock
+- Closed trades, filterable by year and searchable
 
-## 🛠 Tech Stack
+**Taxes**
+- Short- and long-term gains, dividends and foreign tax withheld per tax year
+  (taxable accounts only)
+- Profit by stock, realized and unrealized, by holding period, with the last
+  sale price, today's price, and when your next shares turn long-term
 
-- **Frontend**: Dash (Plotly), Dash Bootstrap Components (DBC).
-- **Backend Data**: Pandas, NumPy.
-- **Automation**: Playwright (Python).
-- **Market Data**: yfinance API.
-- **Styling**: Vanilla CSS (Custom Glassmorphism engine).
+All accounts in the export are discovered automatically. Retirement accounts
+(401k, IRA, BrokerageLink) are kept apart from taxable ones, and money moved
+between your own accounts is not counted as new money.
 
-## 📥 Setup & Usage
+## Setup
 
-### 1. Installation
+Requires Python 3.11+ and Google Chrome.
+
 ```bash
-# Clone the repository
 git clone https://github.com/tushar2407/financial-dashboard.git
 cd financial-dashboard
-
-# Set up virtual environment
 python3 -m venv venv
-source venv/bin/bin/activate  # Mac/Linux
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Auto-Fetch Data
+## Try it with demo data
+
 ```bash
-# Run the scraper to get the latest Fidelity data
-# Handle MFA manually in the browser window if prompted
-python fetch_data.py
+python src/app.py --demo
 ```
 
-### 3. Launch Dashboard
+Open http://127.0.0.1:8050. Demo mode reads only `data/demo/`, a synthetic
+history for two made-up accounts (`scripts/make_demo_data.py` regenerates it),
+and never contacts Fidelity.
+
+## Use it with your Fidelity accounts
+
 ```bash
-# Start the Dash server
 python src/app.py
 ```
-If data has not been fetched yet today, the server runs the Fidelity fetch first
-(log in and complete MFA in the Chrome window) and then starts with fresh data.
-Press Ctrl+C during the fetch to skip it, or start with `python src/app.py --no-fetch`.
-Visit `http://127.0.0.1:8050` in your browser.
 
----
-*Created with ❤️ for premium financial tracking.*
+If your data hasn't been fetched today, a Chrome window opens on Fidelity's
+login page first. Sign in and complete MFA; the app downloads your activity
+history into `data/` and then starts. Press Ctrl+C during the fetch to start
+with the data you already have, or run `python src/app.py --no-fetch` to skip
+it. `python fetch_data.py` runs the fetch on its own.
+
+Optional settings live in `data/goals.json`:
+
+```json
+{ "cash_target": 0.10, "benchmark": "VOO" }
+```
+
+## Privacy
+
+`data/` (your exports, settings and caches) and `.fidelity_session/` (the
+saved browser login) are git-ignored. Only the synthetic files in
+`data/demo/` are part of the repository.
+
+## How the numbers are computed
+
+- **Positions and cost basis** are rebuilt from the transaction history.
+  Sales are matched to purchases first-in, first-out within each account,
+  Fidelity's default.
+- **Prices** come from Yahoo Finance. They are not split-adjusted, so they
+  line up with the share counts Fidelity recorded at the time. If a holding
+  has no recent market price, the app says so instead of silently valuing it
+  at an old trade price.
+- **XIRR** is the annualized return on your actual cash flows. **TWR** chains
+  daily returns, so the size and timing of deposits doesn't affect it.
+- **Tax figures** are estimates: no wash-sale adjustments, and ESPP cost basis
+  is the purchase price. Your 1099 is authoritative.
+
+## Development
+
+```bash
+for t in tests/test_*.py; do python "$t"; done
+```
+
+The code is in `src/`:
+- **Data:** `data_loader.py` (parsing and prices), `metrics.py` (cost basis
+  and returns), `insights.py` (derived facts)
+- **UI:** `layout.py`, `views.py`, `components.py`, `charts.py`,
+  `formatting.py`
+- **App:** `app.py` (wiring and callbacks)
