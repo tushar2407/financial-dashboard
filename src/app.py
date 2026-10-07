@@ -15,11 +15,12 @@ from metrics import (calculate_dividend_income, calculate_net_invested, calculat
                      calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics,
                      calculate_yearly_returns)
 from components import create_history_table
-from insights import (allocation_summary, compare_window, load_goals, monthly_deposits,
-                      realized_by_symbol, stock_profit_breakdown, trading_summary,
-                      trades_per_month)
+from insights import (allocation_summary, compare_window, filter_realized, last_sales, load_goals,
+                      monthly_deposits, realized_by_symbol, search_breakdown,
+                      stock_profit_breakdown, trading_summary, trades_per_month,
+                      yearly_tax_summary)
 from charts import (allocation_treemap, growth_vs_benchmark, monthly_bars, realized_by_symbol_chart,
-                    yearly_returns_chart)
+                    tax_years_chart, yearly_returns_chart)
 import views
 from fidelity_scraper import refresh_if_stale
 
@@ -269,16 +270,49 @@ def _profit_parts(df):
     return parts
 
 
-def _behavior(df):
+@lru_cache(maxsize=16)
+def _behavior_data(account: str):
+    """Realized sales and per-stock profit breakdown for an account filter.
+    Cached: data is loaded once per server start. Callers must not mutate."""
+    df = _filter_df(account)
     _, realized = calculate_cost_basis(df)
+    return realized, stock_profit_breakdown(_profit_parts(df))
+
+
+def _behavior(df, account):
+    realized, breakdown = _behavior_data(account)
+    tax_summary = yearly_tax_summary(df, realized)
     return views.behavior_view(
         trading_summary(df, realized),
         monthly_bars(trades_per_month(df), "Trades per month", "Trades"),
         monthly_bars(monthly_deposits(df), "New money added per month", "Added", money=True),
         realized_by_symbol_chart(realized_by_symbol(realized)),
-        create_history_table(realized),
-        views.profit_by_stock_section(stock_profit_breakdown(_profit_parts(df))),
+        views.tax_year_section(tax_summary, tax_years_chart(tax_summary)),
+        views.profit_by_stock_section(breakdown),
+        views.closed_trades_section(sorted({r['Date'].year for r in realized})),
     )
+
+
+@app.callback(
+    Output('profit-table-container', 'children'),
+    Input('profit-search', 'value'),
+    Input('account-select', 'value'),
+)
+def update_profit_table(query, account):
+    realized, breakdown = _behavior_data(account)
+    return views.profit_table(search_breakdown(breakdown, query), last_sales(realized),
+                              global_prices.iloc[-1], views.has_retirement(breakdown))
+
+
+@app.callback(
+    Output('closed-trades-container', 'children'),
+    Input('trades-year', 'value'),
+    Input('trades-search', 'value'),
+    Input('account-select', 'value'),
+)
+def update_closed_trades(year, query, account):
+    realized, _ = _behavior_data(account)
+    return create_history_table(filter_realized(realized, year, query))
 
 
 @app.callback(
@@ -294,7 +328,7 @@ def render_view(view, account, categories_data):
     if view == 'allocation':
         return _allocation(df, categories_data or {})
     if view == 'behavior':
-        return _behavior(df)
+        return _behavior(df, account)
     return _overview(df, account)
 
 

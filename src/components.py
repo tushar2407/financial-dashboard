@@ -2,7 +2,6 @@ import re
 
 from dash import html
 import dash_bootstrap_components as dbc
-import pandas as pd
 
 def create_info_icon(target_id, info):
     """Small circled 'i' that shows `info` (text or components) on hover."""
@@ -38,62 +37,61 @@ def create_card(title, value, subtitle=None, color="primary", annotation=None, i
         id=card_id
     )
 
+def _term_label(sale) -> str:
+    """Short / Long / Mixed by the lots a sale used; retirement sales have no term."""
+    if sale.get('Account Type') == 'retirement':
+        return "Retirement"
+    st, lt = abs(sale.get('Short-Term P/L', 0.0)), abs(sale.get('Long-Term P/L', 0.0))
+    if lt < 0.005:
+        return "Short"
+    return "Long" if st < 0.005 else "Mixed"
+
+
 def create_history_table(history_data):
+    """Closed trades, newest first, with each sale's tax term and a total line."""
     if not history_data:
-        return html.Div("No transaction history available", className="text-muted")
-        
-    df = pd.DataFrame(history_data)
+        return html.Div("No closed trades match.", className="text-muted")
 
-    if not df.empty and 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.sort_values('Date', ascending=False)
-        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+    rows_data = sorted(history_data, key=lambda r: r['Date'], reverse=True)
+    taxable = [r for r in rows_data if r.get('Account Type') != 'retirement']
+    total = sum(r['Realized P/L'] for r in rows_data)
+    st = sum(r.get('Short-Term P/L', 0.0) for r in taxable)
+    lt = sum(r.get('Long-Term P/L', 0.0) for r in taxable)
 
-    total_pnl = df['Realized P/L'].sum()
-    
-    # Custom Header
-    header = html.Thead(html.Tr([
-        html.Th("Date", style={'textAlign': 'left'}),
-        html.Th("Symbol", style={'textAlign': 'left'}),
-        html.Th("Qty", style={'textAlign': 'right'}),
-        html.Th("Price", style={'textAlign': 'right'}),
-        html.Th("Cost", style={'textAlign': 'right'}),
-        html.Th("Proceeds", style={'textAlign': 'right'}),
-        html.Th("Realized P/L", style={'textAlign': 'right'}),
-    ]))
-    
-    # Custom Rows
+    def money(v):
+        return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
+
+    header = html.Thead(html.Tr([html.Th(c, style={'textAlign': a}) for c, a in (
+        ("Date", 'left'), ("Symbol", 'left'), ("Term", 'left'), ("Qty", 'right'),
+        ("Price", 'right'), ("Cost", 'right'), ("Proceeds", 'right'), ("Realized P/L", 'right'))]))
     rows = []
-    for _, row in df.iterrows():
-        pl = row['Realized P/L']
-        pl_color = "var(--apple-green)" if pl >= 0 else "var(--apple-red)"
-        
+    for r in rows_data:
+        pl = r['Realized P/L']
         rows.append(html.Tr([
-            html.Td(row['Date'], style={'textAlign': 'left'}),
-            html.Td(row['Symbol'], style={'textAlign': 'left', 'fontWeight': '600'}),
-            html.Td(f"{row['Qty']:,.2f}", style={'textAlign': 'right'}),
-            html.Td(f"${row['Sell Price']:,.2f}", style={'textAlign': 'right'}),
-            html.Td(f"${row['Cost Basis']:,.2f}", style={'textAlign': 'right'}),
-            html.Td(f"${row['Proceeds']:,.2f}", style={'textAlign': 'right'}),
-            html.Td(f"${pl:+,.2f}", style={'textAlign': 'right', 'color': pl_color, 'fontWeight': '600'}),
+            html.Td(f"{r['Date']:%Y-%m-%d}", style={'textAlign': 'left'}),
+            html.Td(r['Symbol'], style={'textAlign': 'left', 'fontWeight': '600'}),
+            html.Td(_term_label(r), style={'textAlign': 'left', 'color': '#c3c2b7'}),
+            html.Td(f"{r['Qty']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${r['Sell Price']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${r['Cost Basis']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(f"${r['Proceeds']:,.2f}", style={'textAlign': 'right'}),
+            html.Td(money(pl), style={'textAlign': 'right', 'fontWeight': '600',
+                                      'color': "var(--apple-green)" if pl >= 0 else "var(--apple-red)"}),
         ]))
 
     return html.Div([
-        html.H5(f"Total Realized P/L: ${total_pnl:,.2f}", 
-                className=f"mb-4 {'text-success' if total_pnl >= 0 else 'text-danger'}",
-                style={'fontWeight': '700'}),
-        # Scrollable container for History Table
         html.Div([
-            dbc.Table(
-                [header, html.Tbody(rows)],
-                id="history-table",
-                className="glass-table mb-0",
-                responsive=True,
-                hover=True,
-                borderless=True
-            )
-        ], style={'maxHeight': '500px', 'overflowY': 'auto', 'borderRadius': '12px'})
+            html.Span(f"Realized P/L: {money(total)}",
+                      className=f"me-3 {'text-success' if total >= 0 else 'text-danger'}",
+                      style={'fontWeight': '700', 'fontSize': '1.15rem'}),
+            html.Span(f"short-term {money(st)} · long-term {money(lt)} · {len(rows_data)} sales",
+                      className="text-muted small"),
+        ], className="mb-3"),
+        html.Div(dbc.Table([header, html.Tbody(rows)], id="history-table",
+                           className="glass-table mb-0", hover=True, borderless=True),
+                 className="sticky-table-box"),
     ])
+
 
 def create_category_accordion_item(
     name: str,

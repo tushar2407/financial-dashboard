@@ -11,6 +11,7 @@ from dash import dcc
 
 SERIES_1 = '#3987e5'      # portfolio / single-series bars
 SERIES_2 = '#d95926'      # benchmark
+SERIES_3 = '#199e70'      # third categorical slot (dividends)
 GAIN = '#3987e5'          # diverging pole: positive
 LOSS = '#e66767'          # diverging pole: negative
 REFERENCE = '#c3c2b7'     # neutral reference line (net invested)
@@ -198,4 +199,34 @@ def yearly_returns_chart(yearly: list) -> dcc.Graph:
     ))
     fig.update_layout(margin=dict(l=8, r=8, t=64, b=8))
     fig.update_yaxes(ticksuffix='%', zeroline=True, zerolinecolor='rgba(255,255,255,0.3)')
+    return _graph(fig)
+
+
+def tax_years_chart(summary: pd.DataFrame) -> dcc.Graph:
+    """Short-term gains, long-term gains and dividends per year (taxable accounts)."""
+    title = "Gains and dividends by tax year"
+    if summary.empty:
+        return _empty(title, "No taxable gains or dividends")
+    current = pd.Timestamp.now().year
+    years = [f"{y} (to date)" if y == current else str(y) for y in summary.index]
+    fig = go.Figure()
+    for column, name, color in (('realized_st', 'Short-term gains', SERIES_1),
+                                ('realized_lt', 'Long-term gains', SERIES_2),
+                                ('dividends', 'Dividends', SERIES_3)):
+        values = summary[column].tolist()
+        fig.add_trace(go.Bar(
+            x=years, y=values, name=name, marker=dict(color=color),
+            text=[_signed_money(v) for v in values], textposition='outside',
+            textfont=dict(color=TEXT_PRIMARY, size=11), cliponaxis=False,
+            customdata=[_signed_money(v) for v in values],
+            hovertemplate=f'%{{x}}<br>{name}: %{{customdata}}<extra></extra>',
+        ))
+    fig.update_layout(**_base_layout(
+        title, height=360, barmode='group', bargap=0.3, bargroupgap=0.08, barcornerradius=4,
+        legend=dict(orientation='h', yanchor='bottom', y=1.0, xanchor='right', x=1,
+                    font=dict(color=TEXT_SECONDARY)),
+    ))
+    fig.update_layout(margin=dict(l=8, r=8, t=64, b=8))
+    fig.update_yaxes(tickprefix='$', tickformat=',.0f', zeroline=True,
+                     zerolinecolor='rgba(255,255,255,0.3)')
     return _graph(fig)

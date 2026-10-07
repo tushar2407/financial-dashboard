@@ -281,3 +281,66 @@ def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
     df = pd.DataFrame.from_dict(rows, orient='index')[PROFIT_COLUMNS]
     df['total'] = df[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt', 'retirement']].sum(axis=1)
     return df.sort_values('total', ascending=False)
+
+
+# ── tax-year view, search and filters ─────────────────────────────────────────
+
+TAX_YEAR_COLUMNS = ['realized_st', 'realized_lt', 'dividends', 'foreign_tax', 'total']
+
+
+def _taxable(df: pd.DataFrame) -> pd.DataFrame:
+    if 'Account Type' not in df.columns:
+        return df
+    return df[df['Account Type'] != 'retirement']
+
+
+def yearly_tax_summary(df: pd.DataFrame, realized: list) -> pd.DataFrame:
+    """Per calendar year, for taxable (non-retirement) accounts: short- and
+    long-term realized gains, dividends received (reinvested ones included,
+    they are taxable too) and foreign tax withheld. `total` is gains plus
+    dividends; foreign tax is shown separately since it is usually a credit."""
+    taxable = _taxable(df)
+    by_year = {}
+
+    def row(year):
+        return by_year.setdefault(int(year), {c: 0.0 for c in TAX_YEAR_COLUMNS})
+
+    for sale in realized:
+        if sale.get('Account Type') == 'retirement':
+            continue
+        r = row(sale['Date'].year)
+        r['realized_st'] += sale.get('Short-Term P/L', 0.0)
+        r['realized_lt'] += sale.get('Long-Term P/L', 0.0)
+    for category, column, sign in (('DIVIDEND', 'dividends', 1), ('TAX', 'foreign_tax', -1)):
+        rows = taxable[taxable['Category'] == category]
+        for year, amount in rows.groupby(rows['Run Date'].dt.year)['Amount'].sum().items():
+            row(year)[column] += sign * amount
+
+    if not by_year:
+        return pd.DataFrame(columns=TAX_YEAR_COLUMNS)
+    out = pd.DataFrame.from_dict(by_year, orient='index')[TAX_YEAR_COLUMNS].sort_index()
+    out['total'] = out['realized_st'] + out['realized_lt'] + out['dividends']
+    return out
+
+
+def filter_realized(realized: list, year=None, query=None) -> list:
+    """Sales in `year` (None or 'all' for every year) whose symbol contains `query`."""
+    q = (query or '').strip().upper()
+    return [r for r in realized
+            if (year in (None, 'all') or r['Date'].year == int(year))
+            and q in str(r['Symbol']).upper()]
+
+
+def last_sales(realized: list) -> dict:
+    """Most recent sale per symbol: {symbol: {'date', 'price'}}."""
+    out = {}
+    for r in sorted(realized, key=lambda r: r['Date']):
+        out[r['Symbol']] = {'date': r['Date'], 'price': r['Sell Price']}
+    return out
+
+
+def search_breakdown(breakdown: pd.DataFrame, query) -> pd.DataFrame:
+    q = (query or '').strip().upper()
+    if not q:
+        return breakdown
+    return breakdown[breakdown.index.astype(str).str.upper().str.contains(q, regex=False)]

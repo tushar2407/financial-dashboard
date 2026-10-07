@@ -478,6 +478,8 @@ def _cost_basis_single_account(df):
                 'Holding Days': round(share_days / shares_sold_so_far) if shares_sold_so_far else 0,
                 'Long-Term P/L': long_term,
                 'Short-Term P/L': pnl - long_term,
+                'Account': row.get('Account', ''),
+                'Account Type': row.get('Account Type', 'brokerage'),
             })
 
         elif action == 'PLAN_TRANSFER_OUT':

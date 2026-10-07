@@ -181,62 +181,38 @@ def _money_cell(v: float, bold: bool = False):
                                 'fontWeight': '700' if bold else '500'})
 
 
+_SEARCH_STYLE = {'backgroundColor': 'rgba(255,255,255,0.07)',
+                 'border': '1px solid rgba(255,255,255,0.2)', 'color': 'white'}
+
+
+def has_retirement(breakdown) -> bool:
+    return abs(breakdown['retirement'].sum()) >= 0.005
+
+
+def _signed(v: float) -> str:
+    return f"{'+' if v >= 0 else '-'}${abs(v):,.0f}"
+
+
 def profit_by_stock_section(breakdown):
-    """Per-stock profit already made (realized) vs. still held (unrealized),
-    split into short- and long-term. `breakdown` is insights.stock_profit_breakdown."""
+    """Totals tiles, a search box and an empty table container that the
+    profit-search callback fills (see profit_table)."""
     if breakdown.empty:
         return html.Div()
     totals = breakdown[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt',
-                        'retirement', 'total']].sum()
-    has_retirement = abs(totals['retirement']) >= 0.005
-
-    def signed(v):
-        return f"{'+' if v >= 0 else '-'}${abs(v):,.0f}"
-
+                        'retirement']].sum()
     tiles = [
-        stat_tile("Made · short-term", signed(totals['realized_st']), "sold within a year of buying",
+        stat_tile("Made · short-term", _signed(totals['realized_st']), "sold within a year of buying",
                   info=_TERM_INFO, tile_id="made-st"),
-        stat_tile("Made · long-term", signed(totals['realized_lt']), "sold after more than a year",
+        stat_tile("Made · long-term", _signed(totals['realized_lt']), "sold after more than a year",
                   tile_id="made-lt"),
-        stat_tile("Holding · short-term", signed(totals['unrealized_st']), "on shares held a year or less",
+        stat_tile("Holding · short-term", _signed(totals['unrealized_st']), "on shares held a year or less",
                   tile_id="hold-st"),
-        stat_tile("Holding · long-term", signed(totals['unrealized_lt']), "on shares held more than a year",
+        stat_tile("Holding · long-term", _signed(totals['unrealized_lt']), "on shares held more than a year",
                   tile_id="hold-lt"),
     ]
-    if has_retirement:
-        tiles.append(stat_tile("Retirement accounts", signed(totals['retirement']),
+    if has_retirement(breakdown):
+        tiles.append(stat_tile("Retirement accounts", _signed(totals['retirement']),
                                "made + holding; not taxed by holding period", tile_id="retirement-pl"))
-
-    columns = [("Stock", 'left'), ("Made · short-term", 'right'), ("Made · long-term", 'right'),
-               ("Holding · short-term", 'right'), ("Holding · long-term", 'right')]
-    if has_retirement:
-        columns.append(("Retirement", 'right'))
-    columns += [("Total", 'right'), ("Shares held", 'right'), ("Turns long-term", 'right')]
-    header = html.Thead(html.Tr([html.Th(c, style={'textAlign': a}) for c, a in columns]))
-
-    def cells(r, label, bold=False):
-        out = [html.Td(label, style={'textAlign': 'left', 'fontWeight': '600'}),
-               _money_cell(r['realized_st']), _money_cell(r['realized_lt']),
-               _money_cell(r['unrealized_st']), _money_cell(r['unrealized_lt'])]
-        if has_retirement:
-            out.append(_money_cell(r['retirement']))
-        out.append(_money_cell(r['total'], bold=True))
-        return out
-
-    body = []
-    for symbol, r in breakdown.iterrows():
-        next_lt = ""
-        if pd.notna(r['next_lt_date']):
-            qty = r['next_lt_shares']
-            next_lt = [f"{r['next_lt_date']:%Y-%m-%d}", html.Br(),
-                       html.Span(f"{qty:,.2f} shares" if qty >= 0.01 else "<0.01 shares",
-                                 className="small text-muted")]
-        body.append(html.Tr(cells(r, symbol) + [
-            html.Td(f"{r['shares']:,.2f}" if r['shares'] else "", style={'textAlign': 'right'}),
-            html.Td(next_lt, style={'textAlign': 'right', 'color': '#c3c2b7', 'whiteSpace': 'nowrap'}),
-        ]))
-    footer = html.Tfoot(html.Tr(cells(totals, "Total", bold=True) + [html.Td(""), html.Td("")],
-                                className="totals-row"))
 
     return html.Div([
         html.H4(["Profit by stock", create_info_icon("profit-by-stock-info", _TERM_INFO)],
@@ -244,15 +220,124 @@ def profit_by_stock_section(breakdown):
         html.P("What you've already made by selling, and what's still on paper in shares you hold. "
                "Click a column to sort.", className="text-muted small mb-3"),
         _stat_row(tiles),
-        # One scroll box (no Bootstrap responsive wrapper) so the header can stick
-        html.Div(dbc.Table([header, html.Tbody(body), footer], className="glass-table mb-0",
-                           hover=True, borderless=True, size="sm"),
-                 className="sticky-table-box"),
+        dbc.Input(id='profit-search', type='search', placeholder='Search stock (e.g. NVDA)...',
+                  style=_SEARCH_STYLE, className="mb-3", autoComplete='off'),
+        html.Div(id='profit-table-container'),
     ], className="glass-card p-4 mb-4")
 
 
-def behavior_view(trading: dict, trades_chart, deposits_chart, realized_chart, history_table,
-                  profit_section=None):
+def profit_table(breakdown, sales: dict, prices, show_retirement: bool):
+    """Per-stock rows (already filtered by search) with the last sale price and
+    today's price so you can compare. `sales` is insights.last_sales."""
+    if breakdown.empty:
+        return html.P("No stocks match.", className="text-muted mb-0")
+    columns = [("Stock", 'left'), ("Made · short-term", 'right'), ("Made · long-term", 'right'),
+               ("Holding · short-term", 'right'), ("Holding · long-term", 'right')]
+    if show_retirement:
+        columns.append(("Retirement", 'right'))
+    columns += [("Total", 'right'), ("Last sold at", 'right'), ("Price now", 'right'),
+                ("Shares held", 'right'), ("Turns long-term", 'right')]
+    header = html.Thead(html.Tr([html.Th(c, style={'textAlign': a}) for c, a in columns]))
+
+    def cells(r, label, bold=False):
+        out = [html.Td(label, style={'textAlign': 'left', 'fontWeight': '600'}),
+               _money_cell(r['realized_st']), _money_cell(r['realized_lt']),
+               _money_cell(r['unrealized_st']), _money_cell(r['unrealized_lt'])]
+        if show_retirement:
+            out.append(_money_cell(r['retirement']))
+        out.append(_money_cell(r['total'], bold=True))
+        return out
+
+    muted = {'textAlign': 'right', 'color': '#c3c2b7', 'whiteSpace': 'nowrap'}
+    body = []
+    for symbol, r in breakdown.iterrows():
+        sale = sales.get(symbol)
+        now = prices.get(symbol) if symbol in prices else None
+        now = None if now is None or pd.isna(now) else float(now)
+        last_sold = ([f"${sale['price']:,.2f}", html.Br(),
+                      html.Span(f"{sale['date']:%Y-%m-%d}", className="small text-muted")]
+                     if sale else "")
+        price_now = ""
+        if now is not None:
+            price_now = [f"${now:,.2f}"]
+            if sale and sale['price']:
+                change = now / sale['price'] - 1
+                price_now += [html.Br(), html.Span(f"{change:+.1%} vs. last sale",
+                                                   className="small text-muted")]
+        next_lt = ""
+        if pd.notna(r['next_lt_date']):
+            qty = r['next_lt_shares']
+            next_lt = [f"{r['next_lt_date']:%Y-%m-%d}", html.Br(),
+                       html.Span(f"{qty:,.2f} shares" if qty >= 0.01 else "<0.01 shares",
+                                 className="small text-muted")]
+        body.append(html.Tr(cells(r, symbol) + [
+            html.Td(last_sold, style=muted),
+            html.Td(price_now, style={**muted, 'color': '#fff'}),
+            html.Td(f"{r['shares']:,.2f}" if r['shares'] else "", style={'textAlign': 'right'}),
+            html.Td(next_lt, style=muted),
+        ]))
+    totals = breakdown[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt',
+                        'retirement', 'total']].sum()
+    footer = html.Tfoot(html.Tr(cells(totals, "Total", bold=True) + [html.Td("")] * 4,
+                                className="totals-row"))
+    # One scroll box (no Bootstrap responsive wrapper) so the header can stick
+    return html.Div(dbc.Table([header, html.Tbody(body), footer], className="glass-table mb-0",
+                              hover=True, borderless=True, size="sm"),
+                    className="sticky-table-box")
+
+
+def tax_year_section(summary, chart):
+    """Chart plus a table of taxable gains and dividends per calendar year."""
+    if summary.empty:
+        return html.Div([
+            html.H4("By tax year", className="text-white mb-2"),
+            html.P("No taxable accounts in this view.", className="text-muted mb-0"),
+        ], className="glass-card p-4 mb-4")
+    current = pd.Timestamp.now().year
+    header = html.Thead(html.Tr([html.Th(c, style={'textAlign': a}) for c, a in (
+        ("Year", 'left'), ("Short-term gains", 'right'), ("Long-term gains", 'right'),
+        ("Dividends", 'right'), ("Gains + dividends", 'right'), ("Foreign tax withheld", 'right'))]))
+    body = [html.Tr([
+        html.Td(f"{year} (to date)" if year == current else str(year),
+                style={'textAlign': 'left', 'fontWeight': '600'}),
+        _money_cell(r['realized_st']), _money_cell(r['realized_lt']), _money_cell(r['dividends']),
+        _money_cell(r['total'], bold=True),
+        html.Td(f"${r['foreign_tax']:,.2f}", style={'textAlign': 'right', 'color': '#c3c2b7'}),
+    ]) for year, r in summary.iterrows()]
+    return html.Div([
+        html.H4(["By tax year", create_info_icon("tax-year-info", [
+            html.P("Taxable (non-retirement) accounts only. Dividends include reinvested ones, "
+                   "which are taxable too."),
+            html.P("Foreign tax withheld can usually be claimed as a credit."),
+            html.P("Estimates from your Fidelity history: no wash-sale adjustments, and ESPP "
+                   "cost basis is the purchase price. Your 1099 is authoritative.", className="mb-0"),
+        ])], className="text-white mb-3"),
+        chart,
+        html.Div(dbc.Table([header, html.Tbody(body)], className="glass-table mb-0",
+                           hover=True, borderless=True, size="sm"),
+                 className="sticky-table-box mt-3"),
+    ], className="glass-card p-4 mb-4")
+
+
+def closed_trades_section(years: list):
+    """Year filter + search; the closed-trades callback fills the container."""
+    return html.Div([
+        html.H4("Closed trades", className="text-white mb-3"),
+        dbc.Row([
+            dbc.Col(dcc.Dropdown(
+                id='trades-year', value='all', clearable=False, searchable=False,
+                options=[{'label': 'All years', 'value': 'all'}] +
+                        [{'label': str(y), 'value': y} for y in sorted(years, reverse=True)],
+                className='account-select'), width=12, md=3, className="mb-2 mb-md-0"),
+            dbc.Col(dbc.Input(id='trades-search', type='search', placeholder='Search stock...',
+                              style=_SEARCH_STYLE, autoComplete='off'), width=12, md=5),
+        ], className="mb-3"),
+        html.Div(id='closed-trades-container'),
+    ], className="glass-card p-4 mb-4")
+
+
+def behavior_view(trading: dict, trades_chart, deposits_chart, realized_chart,
+                  tax_section, profit_section, trades_section):
     busiest = trading['busiest_month']
     return html.Div([
         _stat_row([
@@ -265,16 +350,14 @@ def behavior_view(trading: dict, trades_chart, deposits_chart, realized_chart, h
                       "from purchase to sale, first-in first-out"),
             stat_tile("Realized P/L", f"${trading['realized_total']:,.0f}", "from all closed sales"),
         ]),
+        tax_section,
         dbc.Row([
             _panel(trades_chart, width=12, lg=6),
             _panel(deposits_chart, width=12, lg=6),
         ]),
         dbc.Row([_panel(realized_chart, width=12)]),
         profit_section,
-        html.Div([
-            html.H4("Closed trades", className="text-white mb-4"),
-            history_table,
-        ], className="glass-card p-4 mb-4"),
+        trades_section,
     ])
 
 
