@@ -46,14 +46,14 @@ def test_periodic_xirr():
     print(f"Metrics: {metrics}")
     
     # Lifetime should be around 10%
-    if metrics['Lifetime']:
-        print(f"Lifetime XIRR: {metrics['Lifetime']:.4f}")
-        assert abs(metrics['Lifetime'] - 0.1) < 0.01
+    if metrics['Lifetime_XIRR']:
+        print(f"Lifetime XIRR: {metrics['Lifetime_XIRR']:.4f}")
+        assert abs(metrics['Lifetime_XIRR'] - 0.1) < 0.01
         
     # 1Y should also be around 10%
-    if metrics['1Y']:
-        print(f"1Y XIRR: {metrics['1Y']:.4f}")
-        assert abs(metrics['1Y'] - 0.1) < 0.01
+    if metrics['1Y_XIRR']:
+        print(f"1Y XIRR: {metrics['1Y_XIRR']:.4f}")
+        assert abs(metrics['1Y_XIRR'] - 0.1) < 0.01
 
     print("test_periodic_xirr passed!")
 
