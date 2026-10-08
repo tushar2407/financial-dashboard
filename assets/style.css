@@ -306,6 +306,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); font-weight: 600; letter-spacing: -
 .data-table thead th[data-order]::after { margin-left: 4px; color: var(--accent); font-size: 8px; }
 .data-table thead th[data-order="asc"]::after { content: "▲"; }
 .data-table thead th[data-order="desc"]::after { content: "▼"; }
+.data-table thead th[data-order="asc"][data-rank]::after { content: "▲" attr(data-rank); }
+.data-table thead th[data-order="desc"][data-rank]::after { content: "▼" attr(data-rank); }
 
 .data-table tbody tr:hover td { background: var(--hover); }
 .data-table tbody tr:last-child td { border-bottom: none; }
