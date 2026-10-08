@@ -5,7 +5,7 @@ import pandas as pd
 
 from components import (create_category_accordion_item, data_table, empty_state, kpi, kpi_strip,
                         panel, pl_td, td, two_line)
-from formatting import date, money, pct, shares, sign_class
+from formatting import date, days, money, pct, shares, sign_class
 
 RANGE_OPTIONS = ['1D', '5D', '1M', '6M', '1Y', '5Y', 'ALL']
 _RANGE_WORDS = {'1D': "last day", '5D': "last 5 days", '1M': "last month",
@@ -269,7 +269,8 @@ def profit_table(breakdown, sales: dict, prices, show_retirement: bool):
     if show_retirement:
         columns.append(("Retirement", True))
     columns += [("Total", True), ("Last sold", True), ("Price now", True),
-                ("Shares", True), ("Turns long-term", True)]
+                ("Shares", True), ("Avg held", True), ("Avg held when sold", True),
+                ("Turns long-term", True)]
 
     def pl_cells(r):
         cells = [pl_td(r['realized_st']), pl_td(r['realized_lt']),
@@ -293,9 +294,11 @@ def profit_table(breakdown, sales: dict, prices, show_retirement: bool):
             td(two_line(money(now, cents=True), f"{pct(change)} vs. last sale" if change is not None else None)
                if now is not None else "—", numeric=True, cls="two-line"),
             td(shares(r['shares']) if r['shares'] else "—", numeric=True, cls="" if r['shares'] else "muted"),
+            td(days(r['held_days']), numeric=True, cls="" if pd.notna(r['held_days']) else "muted"),
+            td(days(r['sold_days']), numeric=True, cls="" if pd.notna(r['sold_days']) else "muted"),
             td(next_lt or "—", numeric=True, cls="two-line" if next_lt else "muted"),
         ]))
     totals = breakdown[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt',
                         'retirement', 'total']].sum()
-    footer = html.Tr([td("Total")] + pl_cells(totals) + [td("")] * 4)
+    footer = html.Tr([td("Total")] + pl_cells(totals) + [td("")] * 6)
     return data_table(columns, rows, footer=footer, table_id="profit-table")

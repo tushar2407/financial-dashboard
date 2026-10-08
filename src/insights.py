@@ -228,7 +228,8 @@ def compare_window(portfolio_value: pd.Series, daily_flows: pd.Series,
 # ── profit by stock, split by tax term ────────────────────────────────────────
 
 PROFIT_COLUMNS = ['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt',
-                  'retirement', 'total', 'shares', 'next_lt_date', 'next_lt_shares']
+                  'retirement', 'total', 'shares', 'next_lt_date', 'next_lt_shares',
+                  'held_days', 'sold_days']
 
 
 def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
@@ -239,10 +240,13 @@ def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
     (as Fidelity does). Retirement accounts are not taxed by holding period, so
     their gains go to a single 'retirement' column. Unrealized shares are
     classed by how long they have been held as of `today`; `next_lt_date` is
-    when the next short-term shares turn long-term.
+    when the next short-term shares turn long-term. `held_days` is the
+    share-weighted average age of shares still held; `sold_days` the
+    share-weighted average holding period of shares sold (NaN when none).
     """
     today = pd.Timestamp(today or pd.Timestamp.now().normalize())
     rows = {}
+    share_days = {}   # symbol -> [held share-days, sold share-days, sold shares]
 
     def row(symbol):
         return rows.setdefault(symbol, {c: 0.0 for c in PROFIT_COLUMNS} |
@@ -252,6 +256,9 @@ def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
         retirement = account_type == 'retirement'
         for sale in realized:
             r = row(sale['Symbol'])
+            acc = share_days.setdefault(sale['Symbol'], [0.0, 0.0, 0.0])
+            acc[1] += sale.get('Holding Days', 0) * sale.get('Qty', 0)
+            acc[2] += sale.get('Qty', 0)
             if retirement:
                 r['retirement'] += sale['Realized P/L']
             else:
@@ -262,6 +269,7 @@ def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
             r['shares'] += h['Quantity']
             price = h.get('Current Price') or 0.0
             for lot in h.get('Lots', []):
+                share_days.setdefault(h['Symbol'], [0.0, 0.0, 0.0])[0] += lot['qty'] * (today - lot['date']).days
                 gain = lot['qty'] * (price - lot['cost']) if price else 0.0
                 if retirement:
                     r['retirement'] += gain
@@ -277,6 +285,10 @@ def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
 
     if not rows:
         return pd.DataFrame(columns=PROFIT_COLUMNS)
+    for symbol, (held, sold, sold_qty) in share_days.items():
+        r = rows[symbol]
+        r['held_days'] = held / r['shares'] if r['shares'] else float('nan')
+        r['sold_days'] = sold / sold_qty if sold_qty else float('nan')
     df = pd.DataFrame.from_dict(rows, orient='index')[PROFIT_COLUMNS]
     df['total'] = df[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt', 'retirement']].sum(axis=1)
     return df.sort_values('total', ascending=False)

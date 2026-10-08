@@ -103,6 +103,26 @@ def test_cost_basis_matches_lots_within_each_account():
     assert sorted(lot['cost'] for lot in x['Lots']) == [10.0, 20.0]
 
 
+def test_breakdown_has_share_weighted_holding_periods():
+    holdings, realized = calculate_cost_basis(_taxable())
+    rows = stock_profit_breakdown(
+        [('brokerage', _enrich(holdings, {'A': 40.0, 'B': 110.0}), realized)], today=TODAY)
+    a, b = rows.loc['A'], rows.loc['B']
+    # A sold 15 shares on 2025-07-01: 10 held 546 days, 5 held 30 days
+    assert round(a['sold_days']) == round((10 * 546 + 5 * 30) / 15)
+    # A still holds 5 shares bought 2025-06-01 (485 days); B 2 shares from 2026-09-01 (28 days)
+    assert a['held_days'] == 485 and b['held_days'] == 28
+    assert pd.isna(b['sold_days'])                       # never sold
+
+
+def test_fully_sold_stock_has_no_held_days():
+    df = pd.DataFrame([_tx('2025-01-02', 'BUY', -100.0, 'C', 10.0),
+                       _tx('2025-03-03', 'SELL', 120.0, 'C', -10.0)])
+    holdings, realized = calculate_cost_basis(df)
+    c = stock_profit_breakdown([('brokerage', holdings, realized)], today=TODAY).loc['C']
+    assert pd.isna(c['held_days']) and c['sold_days'] == 60
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

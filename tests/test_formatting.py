@@ -5,7 +5,7 @@ import pandas as pd
 
 sys.path.append(os.path.abspath('src'))
 
-from formatting import MINUS, ZERO, date, money, pct, sign_class, shares
+from formatting import MINUS, ZERO, date, days, money, pct, sign_class, shares
 
 
 def test_money_plain_and_signed():
@@ -38,6 +38,13 @@ def test_shares_and_date():
     assert shares(0.001) == "<0.01"
     assert date(pd.Timestamp('2026-09-22')) == "Sep 22, 2026"
     assert date(None) == ZERO
+
+
+def test_days():
+    assert days(142.4) == "142 days"
+    assert days(1) == "1 day"
+    assert days(1050) == "1,050 days"
+    assert days(float('nan')) == ZERO
 
 
 def test_sign_class():

@@ -40,6 +40,12 @@ def shares(v) -> str:
     return "<0.01" if 0 < abs(v) < 0.01 else f"{v:,.2f}"
 
 
+def days(v) -> str:
+    if _missing(v):
+        return ZERO
+    return f"{v:,.0f} day" if round(v) == 1 else f"{v:,.0f} days"
+
+
 def date(d) -> str:
     if d is None or pd.isna(d):
         return ZERO
