@@ -559,6 +559,18 @@ def unadjust_for_splits(prices, splits):
     return out
 
 
+def trailing_dividends_per_share(dividends, end=None) -> dict:
+    """Dividends per share paid in the 12 months up to `end`, per symbol.
+
+    `dividends` is Yahoo's per-share dividend table (split-adjusted, so it
+    matches today's share count). Symbols that paid nothing are omitted.
+    """
+    end = pd.Timestamp(end or datetime.now())
+    recent = dividends[(dividends.index > end - pd.DateOffset(years=1)) & (dividends.index <= end)]
+    totals = recent.fillna(0).sum()
+    return {sym: float(v) for sym, v in totals.items() if v > 0}
+
+
 def fetch_price_data(symbols, start_date, tx_df=None):
     """
     Fetches historical price data for the given symbols.
@@ -601,6 +613,8 @@ def fetch_price_data(symbols, start_date, tx_df=None):
     BATCH_SIZE = 20
     market_data = pd.DataFrame()
     split_data = pd.DataFrame()
+    dividend_data = pd.DataFrame()
+    dividend_per_share = {}
     for batch_start in range(0, len(valid_symbols), BATCH_SIZE):
         batch = valid_symbols[batch_start:batch_start + BATCH_SIZE]
         print(f"  Fetching price batch {batch_start // BATCH_SIZE + 1}"
@@ -615,12 +629,16 @@ def fetch_price_data(symbols, start_date, tx_df=None):
                                   auto_adjust=False, actions=True)
                 batch_data = raw['Close']
                 batch_splits = raw['Stock Splits'] if 'Stock Splits' in raw else pd.DataFrame()
+                batch_divs = raw['Dividends'] if 'Dividends' in raw else pd.DataFrame()
+                if isinstance(batch_divs, pd.Series):
+                    batch_divs = batch_divs.to_frame(name=batch[0])
                 if isinstance(batch_data, pd.Series):
                     batch_data = batch_data.to_frame(name=batch[0])
                 if isinstance(batch_splits, pd.Series):
                     batch_splits = batch_splits.to_frame(name=batch[0])
                 market_data = batch_data if market_data.empty else market_data.join(batch_data, how='outer')
                 split_data = batch_splits if split_data.empty else split_data.join(batch_splits, how='outer')
+                dividend_data = batch_divs if dividend_data.empty else dividend_data.join(batch_divs, how='outer')
                 break  # Success — move to next batch
             except Exception as e:
                 wait = 2 ** (attempt + 1)  # 2s, 4s, 8s backoff
@@ -687,6 +705,8 @@ def fetch_price_data(symbols, start_date, tx_df=None):
         market_data = market_data.rename(columns=yf_to_csv)
         if not split_data.empty:
             market_data = unadjust_for_splits(market_data, split_data.rename(columns=yf_to_csv))
+        if not dividend_data.empty:
+            dividend_per_share = trailing_dividends_per_share(dividend_data.rename(columns=yf_to_csv))
         combined_prices = market_data
         
     # Process Tx Prices (already has original symbols)
@@ -721,6 +741,8 @@ def fetch_price_data(symbols, start_date, tx_df=None):
 
     requested = [reverse_map.get(s, s) for s in valid_symbols]
     combined_prices.attrs['stale_symbols'] = find_stale_price_symbols(market_data, requested)
+    # Small dict (not a frame): pandas copies attrs on every operation
+    combined_prices.attrs['dividend_per_share'] = dividend_per_share
     return combined_prices
 
 def calculate_portfolio_value(holdings_df, price_df):

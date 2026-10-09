@@ -15,9 +15,9 @@ from metrics import (calculate_dividend_income, calculate_net_invested, calculat
                      calculate_net_invested_breakdown, get_daily_cash_flows, calculate_performance_metrics,
                      calculate_yearly_returns)
 from components import create_history_table, empty_state
-from insights import (allocation_summary, compare_window, filter_realized, last_sales, load_goals,
-                      monthly_deposits, realized_by_symbol, search_breakdown,
-                      stock_profit_breakdown, trading_summary, trades_per_month,
+from insights import (allocation_summary, compare_window, dividends_by_symbol, dividends_by_year,
+                      filter_realized, last_sales, load_goals, monthly_deposits, realized_by_symbol,
+                      search_breakdown, stock_profit_breakdown, trading_summary, trades_per_month,
                       yearly_tax_summary)
 from charts import (allocation_treemap, growth_vs_benchmark, monthly_bars, realized_by_symbol_chart,
                     tax_years_chart, yearly_returns_chart)
@@ -244,7 +244,9 @@ def _behavior_data(account: str):
     Cached: data is loaded once per server start. Callers must not mutate."""
     df = _filter_df(account)
     _, realized = calculate_cost_basis(df)
-    return realized, stock_profit_breakdown(_profit_parts(df))
+    return realized, stock_profit_breakdown(
+        _profit_parts(df), dividends=dividends_by_symbol(df),
+        dividend_per_share=global_prices.attrs.get('dividend_per_share', {}))
 
 
 def _activity(df, account):
@@ -261,7 +263,7 @@ def _activity(df, account):
 def _taxes(df, account):
     realized, breakdown = _behavior_data(account)
     summary = yearly_tax_summary(df, realized)
-    return views.taxes_view(summary, tax_years_chart(summary), breakdown)
+    return views.taxes_view(summary, tax_years_chart(summary), breakdown, dividends_by_year(df))
 
 
 @app.callback(

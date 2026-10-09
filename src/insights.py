@@ -155,7 +155,7 @@ RANGES = {
     '1D': 1, '5D': 5,
     '1M': pd.DateOffset(months=1), '6M': pd.DateOffset(months=6),
     '1Y': pd.DateOffset(years=1), '5Y': pd.DateOffset(years=5),
-    'ALL': None,
+    'YTD': 'ytd', 'ALL': None,
 }
 
 
@@ -171,7 +171,8 @@ def window_start(index: pd.DatetimeIndex, range_key: str) -> tuple:
         return index[0], False
     if isinstance(spec, int):
         return (index[-(spec + 1)], False) if len(index) > spec else (index[0], True)
-    cutoff = index[-1] - spec
+    # YTD is measured from the last close of the previous year
+    cutoff = pd.Timestamp(year=index[-1].year - 1, month=12, day=31) if spec == 'ytd' else index[-1] - spec
     before = index[index <= cutoff]
     return (before[-1], False) if len(before) else (index[0], True)
 
@@ -227,12 +228,45 @@ def compare_window(portfolio_value: pd.Series, daily_flows: pd.Series,
 
 # ── profit by stock, split by tax term ────────────────────────────────────────
 
-PROFIT_COLUMNS = ['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt',
+PROFIT_COLUMNS = ['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt', 'dividends',
                   'retirement', 'total', 'shares', 'next_lt_date', 'next_lt_shares',
-                  'held_days', 'sold_days']
+                  'held_days', 'sold_days', 'current_yield', 'yield_on_cost']
+# Fidelity's cash sweep funds: their "dividends" are interest on uninvested cash
+MONEY_MARKET_SYMBOLS = {'SPAXX', 'FDRXX', 'SPRXX', 'FZFXX', 'FZDXX', 'FCASH'}
 
 
-def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
+def dividends_by_symbol(df: pd.DataFrame) -> pd.DataFrame:
+    """Dividends net of foreign tax withheld, per symbol, split into taxable and
+    retirement accounts (columns 'taxable' and 'retirement')."""
+    income = df[df['Category'].isin(['DIVIDEND', 'TAX'])]
+    if income.empty:
+        return pd.DataFrame(columns=['taxable', 'retirement'])
+    kind = income.get('Account Type', pd.Series('brokerage', index=income.index))
+    kind = kind.where(kind == 'retirement', 'taxable')
+    table = income.groupby([income['Symbol'], kind])['Amount'].sum().unstack(fill_value=0.0)
+    return table.reindex(columns=['taxable', 'retirement'], fill_value=0.0)
+
+
+def dividends_by_year(df: pd.DataFrame) -> pd.DataFrame:
+    """Gross dividends per symbol per calendar year in taxable accounts, as on a
+    1099-DIV, plus foreign tax withheld ('foreign_tax') and the all-year 'total'.
+    Money market dividends are included: they are taxable income too."""
+    taxable = _taxable(df)
+    divs = taxable[taxable['Category'] == 'DIVIDEND']
+    if divs.empty:
+        return pd.DataFrame()
+    table = divs.pivot_table(index='Symbol', columns=divs['Run Date'].dt.year, values='Amount',
+                             aggfunc='sum', fill_value=0.0)
+    table.columns = [int(c) for c in table.columns]
+    tax = taxable[taxable['Category'] == 'TAX'].groupby('Symbol')['Amount'].sum()
+    years = sorted(table.columns)
+    out = table[years].assign(foreign_tax=(-tax).reindex(table.index, fill_value=0.0),
+                              total=table[years].sum(axis=1))
+    return out.sort_values('total', ascending=False)
+
+
+def stock_profit_breakdown(parts: list, today=None, dividends=None,
+                           dividend_per_share=None) -> pd.DataFrame:
     """Realized and unrealized P/L per stock, split into short- and long-term.
 
     `parts` is a list of (account_type, enriched holdings, realized sales), one
@@ -243,14 +277,23 @@ def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
     when the next short-term shares turn long-term. `held_days` is the
     share-weighted average age of shares still held; `sold_days` the
     share-weighted average holding period of shares sold (NaN when none).
+
+    `dividends` (from dividends_by_symbol) adds dividends net of foreign tax:
+    taxable ones to 'dividends', retirement ones to 'retirement'; both count in
+    'total', making it the stock's total return. `dividend_per_share` (trailing
+    12 months, per symbol) gives 'current_yield' (on today's value) and
+    'yield_on_cost' (on what you paid). Money market funds are left out.
     """
     today = pd.Timestamp(today or pd.Timestamp.now().normalize())
     rows = {}
     share_days = {}   # symbol -> [held share-days, sold share-days, sold shares]
+    cost_value = {}   # symbol -> [cost of shares held, value of shares held]
+    nan = float('nan')
 
     def row(symbol):
         return rows.setdefault(symbol, {c: 0.0 for c in PROFIT_COLUMNS} |
-                               {'next_lt_date': pd.NaT, 'next_lt_shares': 0.0})
+                               {'next_lt_date': pd.NaT, 'next_lt_shares': 0.0, 'held_days': nan,
+                                'sold_days': nan, 'current_yield': nan, 'yield_on_cost': nan})
 
     for account_type, holdings, realized in parts:
         retirement = account_type == 'retirement'
@@ -270,6 +313,9 @@ def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
             price = h.get('Current Price') or 0.0
             for lot in h.get('Lots', []):
                 share_days.setdefault(h['Symbol'], [0.0, 0.0, 0.0])[0] += lot['qty'] * (today - lot['date']).days
+                cv = cost_value.setdefault(h['Symbol'], [0.0, 0.0])
+                cv[0] += lot['qty'] * lot['cost']
+                cv[1] += lot['qty'] * price
                 gain = lot['qty'] * (price - lot['cost']) if price else 0.0
                 if retirement:
                     r['retirement'] += gain
@@ -283,14 +329,27 @@ def stock_profit_breakdown(parts: list, today=None) -> pd.DataFrame:
                     elif turns_lt == r['next_lt_date']:
                         r['next_lt_shares'] += lot['qty']
 
-    if not rows:
-        return pd.DataFrame(columns=PROFIT_COLUMNS)
+    if dividends is not None:
+        for symbol, d in dividends.iterrows():
+            r = row(symbol)
+            r['dividends'] += d['taxable']
+            r['retirement'] += d['retirement']
     for symbol, (held, sold, sold_qty) in share_days.items():
         r = rows[symbol]
-        r['held_days'] = held / r['shares'] if r['shares'] else float('nan')
-        r['sold_days'] = sold / sold_qty if sold_qty else float('nan')
+        r['held_days'] = held / r['shares'] if r['shares'] else nan
+        r['sold_days'] = sold / sold_qty if sold_qty else nan
+    for symbol, (cost, value) in cost_value.items():
+        dps, r = (dividend_per_share or {}).get(symbol), rows[symbol]
+        if dps and r['shares']:
+            r['current_yield'] = dps * r['shares'] / value if value else nan
+            r['yield_on_cost'] = dps * r['shares'] / cost if cost else nan
+
+    rows = {s: r for s, r in rows.items() if s not in MONEY_MARKET_SYMBOLS}
+    if not rows:
+        return pd.DataFrame(columns=PROFIT_COLUMNS)
     df = pd.DataFrame.from_dict(rows, orient='index')[PROFIT_COLUMNS]
-    df['total'] = df[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt', 'retirement']].sum(axis=1)
+    df['total'] = df[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt', 'dividends',
+                      'retirement']].sum(axis=1)
     return df.sort_values('total', ascending=False)
 
 

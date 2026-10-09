@@ -257,8 +257,10 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); font-weight: 600; letter-spacing: -
 
 .kpi-standalone .kpi { border-right: none; padding: 16px; }
 .kpi-compare { margin: 0 16px 16px; padding-top: 10px; border-top: 1px solid var(--border); display: grid; gap: 6px; font-size: 13px; }
-.kpi-compare div { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
-.kpi-compare span:first-child { color: var(--text-3); }
+.kpi-compare > div { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+.kpi-compare > .period-row { flex-direction: column; gap: 2px; margin-bottom: 4px; }
+.period-value { color: var(--text-2); }
+.kpi-compare > div > span:first-child { color: var(--text-3); }
 
 /* ═══ Data tables ═══════════════════════════════════════════════════════════ */
 .table-box { max-height: 560px; overflow: auto; }
@@ -533,3 +535,6 @@ h1, h2, h3, h4, h5, h6 { color: var(--text); font-weight: 600; letter-spacing: -
 }
 .mobile-nav .nav-link { padding: 6px 10px; border-radius: var(--radius-sm); color: var(--text-2); font-size: 13px; white-space: nowrap; }
 .mobile-nav .nav-link.active { background: var(--accent-soft); color: var(--text); }
+
+/* Values that explain themselves on hover (native title tooltip) */
+.has-tip { cursor: help; text-decoration: underline dotted var(--text-3); text-underline-offset: 3px; }

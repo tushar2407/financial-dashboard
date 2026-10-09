@@ -7,9 +7,7 @@ from components import (create_category_accordion_item, data_table, empty_state,
                         panel, pl_td, td, two_line)
 from formatting import date, days, money, pct, shares, sign_class
 
-RANGE_OPTIONS = ['1D', '5D', '1M', '6M', '1Y', '5Y', 'ALL']
-_RANGE_WORDS = {'1D': "last day", '5D': "last 5 days", '1M': "last month",
-                '6M': "last 6 months", '1Y': "last year", '5Y': "last 5 years"}
+RANGE_OPTIONS = ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y', 'ALL']
 
 _TERM_INFO = [
     html.P("Short-term: shares held one year or less when sold. Taxed like ordinary income."),
@@ -65,10 +63,8 @@ def summary_strip(s: dict):
     ])
 
 
-def _period_words(window: dict) -> str:
-    if window['range'] == 'ALL' or window['clipped']:
-        return f"Since {date(window['start'])}"
-    return f"{_RANGE_WORDS[window['range']].capitalize()} · {date(window['start'])} – {date(window['end'])}"
+def _period(window: dict):
+    return html.Span(f"{date(window['start'])} – {date(window['end'])}", className="period-value")
 
 
 def benchmark_tile(window: dict, name: str):
@@ -87,7 +83,7 @@ def benchmark_tile(window: dict, name: str):
             sub=f"{'Ahead of' if diff >= 0 else 'Behind'} the same money in {name}",
             info=info, kpi_id="vs-benchmark"),
         html.Div([
-            html.Div([html.Span("Period"), html.Span(_period_words(window), className="text-2")]),
+            html.Div([html.Span("Period"), _period(window)], className="period-row"),
             html.Div([html.Span("Your return"), html.Span(pct(you), className=sign_class(you))]),
             html.Div([html.Span(f"{name} return"), html.Span(pct(them), className=sign_class(them))]),
         ], className="kpi-compare"),
@@ -201,13 +197,42 @@ def has_retirement(breakdown) -> bool:
     return abs(breakdown['retirement'].sum()) >= 0.005
 
 
-def taxes_view(summary, tax_chart, breakdown):
-    """Term totals, the tax-year chart and table, and profit by stock."""
+def taxes_view(summary, tax_chart, breakdown, dividend_years):
+    """Term totals, the tax-year chart and table, profit by stock, and
+    dividends by stock and year."""
     return html.Div([
         _term_strip(breakdown),
         tax_year_section(summary, tax_chart),
         profit_by_stock_section(breakdown),
+        dividends_by_year_section(dividend_years),
     ])
+
+
+def dividends_by_year_section(table):
+    """Gross dividends per stock per year in taxable accounts (as on a 1099-DIV)."""
+    info = [html.P("Gross dividends received in taxable accounts, by stock and year, as reported "
+                   "on a 1099-DIV. Reinvested dividends are included."),
+            html.P("Money market funds (such as SPAXX) are your cash sweep; their dividends are "
+                   "interest on cash, and taxable.")]
+    if table.empty:
+        return panel("Dividends by stock", empty_state("No dividends in taxable accounts."),
+                     info=info, panel_id="dividends-by-stock")
+    years = [c for c in table.columns if isinstance(c, int)]
+    current = pd.Timestamp.now().year
+    columns = ([("Symbol", False)] +
+               [(f"{y} (to date)" if y == current else str(y), True) for y in years] +
+               [("Total", True), ("Foreign tax withheld", True)])
+
+    def cells(r):
+        return ([td(money(r[y], cents=True), numeric=True, cls="" if abs(r[y]) >= 0.005 else "muted")
+                 for y in years] +
+                [td(money(r['total'], cents=True), numeric=True, cls="strong"),
+                 td(money(r['foreign_tax'], cents=True), numeric=True, cls="text-2")])
+
+    rows = [html.Tr([td(symbol, cls="sym")] + cells(r)) for symbol, r in table.iterrows()]
+    footer = html.Tr([td("Total")] + cells(table.sum()))
+    return panel("Dividends by stock", data_table(columns, rows, footer=footer),
+                 info=info, subtitle="Taxable accounts, gross", flush=True, panel_id="dividends-by-stock")
 
 
 def _term_strip(breakdown):
@@ -259,22 +284,41 @@ def profit_by_stock_section(breakdown):
                  panel_id="profit-by-stock")
 
 
+_CURRENT_YIELD_TIP = ("Current yield: dividends per share over the last 12 months divided by "
+                      "today's price. What a buyer today would earn in dividends.")
+_YIELD_ON_COST_TIP = ("Yield on cost: dividends per share over the last 12 months divided by your "
+                      "average cost per share. What you earn on the money you actually paid; it "
+                      "rises above current yield when the price has gone up since you bought.")
+
+
+def _yield_td(r):
+    """Current yield over yield on cost, from the last 12 months of dividends.
+    Hovering either value explains it."""
+    if pd.isna(r['current_yield']):
+        return td("—", numeric=True, cls="muted")
+    content = [html.Span(pct(r['current_yield'], signed=False), title=_CURRENT_YIELD_TIP, className="has-tip")]
+    if pd.notna(r['yield_on_cost']):
+        content.append(html.Span(f"{pct(r['yield_on_cost'], signed=False)} on cost",
+                                 title=_YIELD_ON_COST_TIP, className="sub has-tip"))
+    return td(content, numeric=True, cls="two-line")
+
+
 def profit_table(breakdown, sales: dict, prices, show_retirement: bool):
     """Per-stock rows (already filtered by search) with the last sale price and
     today's price so you can compare. `sales` is insights.last_sales."""
     if breakdown.empty:
         return empty_state("No stocks match.")
     columns = [("Symbol", False), ("Realized ST", True), ("Realized LT", True),
-               ("Unrealized ST", True), ("Unrealized LT", True)]
+               ("Unrealized ST", True), ("Unrealized LT", True), ("Dividends", True)]
     if show_retirement:
         columns.append(("Retirement", True))
-    columns += [("Total", True), ("Last sold", True), ("Price now", True),
+    columns += [("Total return", True), ("Last sold", True), ("Price now", True), ("Yield", True),
                 ("Shares", True), ("Avg held", True), ("Avg held when sold", True),
                 ("Turns long-term", True)]
 
     def pl_cells(r):
         cells = [pl_td(r['realized_st']), pl_td(r['realized_lt']),
-                 pl_td(r['unrealized_st']), pl_td(r['unrealized_lt'])]
+                 pl_td(r['unrealized_st']), pl_td(r['unrealized_lt']), pl_td(r['dividends'])]
         if show_retirement:
             cells.append(pl_td(r['retirement']))
         return cells + [pl_td(r['total'], strong=True)]
@@ -293,12 +337,13 @@ def profit_table(breakdown, sales: dict, prices, show_retirement: bool):
                numeric=True, cls="two-line" if sale else "muted"),
             td(two_line(money(now, cents=True), f"{pct(change)} vs. last sale" if change is not None else None)
                if now is not None else "—", numeric=True, cls="two-line"),
+            _yield_td(r),
             td(shares(r['shares']) if r['shares'] else "—", numeric=True, cls="" if r['shares'] else "muted"),
             td(days(r['held_days']), numeric=True, cls="" if pd.notna(r['held_days']) else "muted"),
             td(days(r['sold_days']), numeric=True, cls="" if pd.notna(r['sold_days']) else "muted"),
             td(next_lt or "—", numeric=True, cls="two-line" if next_lt else "muted"),
         ]))
-    totals = breakdown[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt',
+    totals = breakdown[['realized_st', 'realized_lt', 'unrealized_st', 'unrealized_lt', 'dividends',
                         'retirement', 'total']].sum()
-    footer = html.Tr([td("Total")] + pl_cells(totals) + [td("")] * 6)
+    footer = html.Tr([td("Total")] + pl_cells(totals) + [td("")] * 7)
     return data_table(columns, rows, footer=footer, table_id="profit-table")

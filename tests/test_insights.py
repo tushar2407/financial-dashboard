@@ -131,6 +131,13 @@ def test_window_start_by_points_and_calendar():
     assert window_start(_DAYS, 'ALL') == (pd.Timestamp('2024-07-22'), False)
 
 
+def test_window_start_ytd_starts_at_last_close_of_previous_year():
+    days = pd.to_datetime(['2025-12-30', '2025-12-31', '2026-01-02', '2026-09-25'])
+    assert window_start(days, 'YTD') == (pd.Timestamp('2025-12-31'), False)
+    # History begins this year: clipped to the first date
+    assert window_start(days[2:], 'YTD') == (pd.Timestamp('2026-01-02'), True)
+
+
 def test_compare_window_rebases_benchmark_on_portfolio_value_at_start():
     idx = pd.to_datetime(['2026-09-23', '2026-09-24', '2026-09-25'])
     pv = pd.Series([100.0, 110.0, 121.0], index=idx)
